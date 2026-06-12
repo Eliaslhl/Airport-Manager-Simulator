@@ -204,7 +204,11 @@ class Passenger:
             self.dir = (0.0, 0.0)
             return
         
-        next_move = airport.get_next_move(self.x, self.y, dist_map, avoid_overcrowding=True)
+        # Pour VA_EMBARQUER, ne pas éviter la foule (les passagers doivent pouvoir entrer dans la porte)
+        # Pour les autres états, éviter les zones surpeuplées
+        avoid_crowding = (self.state != PassengerState.VA_EMBARQUER)
+        
+        next_move = airport.get_next_move(self.x, self.y, dist_map, avoid_overcrowding=avoid_crowding)
         if next_move is None:
             self.dir = (0.0, 0.0)
             return

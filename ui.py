@@ -156,9 +156,12 @@ def draw_map(screen, airport, passengers, score, remaining, nb_boarded, plane_st
     """Dessine la carte complète."""
     screen.clear()
     
-    # Mise à jour densité
+    # Mise à jour densité - ne pas compter les TERMINE
+    # (Ils auraient dû être supprimés de passengers dans game_engine, mais par sécurité...)
     airport.densite[:, :] = 0
     for p in passengers:
+        if p.state == PassengerState.TERMINE:
+            continue
         ix, iy = int(p.x), int(p.y)
         if airport.walkable(ix, iy):
             airport.densite[ix, iy] += 1

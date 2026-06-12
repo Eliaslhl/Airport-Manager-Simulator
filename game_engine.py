@@ -212,6 +212,22 @@ class GameEngine:
             for p in normal_waiting[:slots_available]:
                 self._start_boarding_passenger(p)
     
+    def _update_density(self):
+        """
+        Met à jour la matrice de densité basée sur les passagers actuels.
+        Exclut les passagers TERMINE pour qu'ils ne bloquent pas la porte.
+        Doit être appelée avant le mouvement des passagers.
+        """
+        self.airport.densite[:, :] = 0
+        
+        for p in self.passengers:
+            if p.state == PassengerState.TERMINE:
+                continue
+            
+            ix, iy = int(p.x), int(p.y)
+            if self.airport.walkable(ix, iy):
+                self.airport.densite[ix, iy] += 1
+    
     def update(self, dt, elapsed_time):
         """
         Met à jour le jeu (une frame).
@@ -285,9 +301,24 @@ class GameEngine:
         # Passagers à retirer
         to_remove = []
         
+        # Supprimer les passagers TERMINE du jeu (d'avant cette frame)
+        # CRITIQUE: Les TERMINE ne doivent pas rester pour bloquer la densité de la porte
+        # IMPORTANT: Modifier la liste sur place au lieu de la réassigner!
+        # Sinon le Spawner perd sa référence à la liste
+        i = 0
+        while i < len(self.passengers):
+            if self.passengers[i].state == PassengerState.TERMINE:
+                self.passengers.pop(i)
+            else:
+                i += 1
+        
         # Mise à jour chaque passager (VIP d'abord, puis les autres)
         vip_passengers = [p for p in self.passengers if p.is_vip]
         normal_passengers = [p for p in self.passengers if not p.is_vip]
+        
+        # IMPORTANT: Mettre à jour la densité AVANT le mouvement
+        # Sinon le pathfinding utilisera une densité obsolète
+        self._update_density()
         
         for p in vip_passengers + normal_passengers:
             # Machine à états
@@ -332,7 +363,7 @@ class GameEngine:
                     })
                     to_remove.append(p)
         
-        # Retirer les passagers
+        # Retirer les passagers manqués
         for p in to_remove:
             if p in self.passengers:
                 self.passengers.remove(p)
@@ -414,7 +445,9 @@ class GameEngine:
         
         elif p.state == PassengerState.VA_EMBARQUER:
             # Aller vers la porte (utiliser la cible assignée)
-            if p.assigned_target_pos and p.near_target(p.assigned_target_pos, 0.6):
+            # Utiliser reached_assigned_target() pour être plus tolérant
+            # Si le passager est dans la bonne cellule, le faire embarquer
+            if p.reached_assigned_target(radius=0.8):
                 p.x, p.y = p.assigned_target_pos
                 p.set_state(PassengerState.EMBARQUEMENT)
                 p.boarding_timer = 0.0

@@ -46,7 +46,17 @@ def main():
     # Moteur de jeu
     engine = GameEngine(AIRPORT_MAP)
     airport = AirportMap(AIRPORT_MAP)
+    
+    # DEBUG: Afficher les positions clés
+    print(f"DEBUG: Spawn position: {engine.airport.spawn}")
+    print(f"DEBUG: Checkins: {engine.airport.checkins_ordered}")
+    print(f"DEBUG: Secus: {engine.airport.secus_ordered}")
+    print(f"DEBUG: Lounge blocks: {engine.airport.lounges_ordered}")
+    
     engine.initialize(total_passengers=30, spawn_rate=0.5, plane_depart_time=120.0)
+    
+    print(f"DEBUG: Spawner created with spawn: {engine.spawner.spawn}")
+    print(f"DEBUG: Total passengers to spawn: {engine.spawner.total}")
     
     # Écran
     screen = Screen(airport.W, airport.H)
