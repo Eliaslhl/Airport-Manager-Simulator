@@ -43,6 +43,12 @@ class AirportMap:
             vip_lounge_columns[x] for x in sorted(vip_lounge_columns.keys())
         ]
         
+        # Listes ordonnées : du plus loin (X grand) vers le plus proche (X petit)
+        self.checkins_ordered = sorted(self.checkins, key=lambda p: (p[0], p[1]), reverse=True)
+        self.secus_ordered = sorted(self.secus, key=lambda p: (p[0], p[1]), reverse=True)
+        self.lounges_ordered = sorted(self.lounges, key=lambda p: (p[0], p[1]), reverse=True)
+        self.vip_lounges_ordered = sorted(self.vip_lounges, key=lambda p: (p[0], p[1]), reverse=True)
+        
         # Points cibles (centre de chaque zone)
         self.target_checkin = self.checkins[len(self.checkins) // 2]
         self.target_secu = self.secus[len(self.secus) // 2]

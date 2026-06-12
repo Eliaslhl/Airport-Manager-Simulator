@@ -68,6 +68,12 @@ class Passenger:
         self.current_vip_lounge_block = None  # Bloc du VIP lounge occupé
         self.assigned_checkin_zone = None  # Zone de check-in assignée
         self.assigned_security_zone = None  # Zone de sécurité assignée
+        self.assigned_lounge_block = None  # Bloc de lounge assigné
+        self.assigned_checkin_slot = None  # Index du slot dans la zone check-in
+        self.assigned_security_slot = None  # Index du slot dans la zone sécurité
+        self.assigned_lounge_slot = None  # Index du slot dans le bloc lounge
+        self.assigned_target_cell = None  # Position cible (x, y) entière
+        self.assigned_target_pos = None  # Position cible précise (x.xx, y.yy)
         self.boarding_timer = 0.0  # Timer pour embarquement (1s)
     
     def get_color(self):
@@ -83,12 +89,17 @@ class Passenger:
             self.state = new_state
             self.wait_timer = 0.0
             
-            # Si on passe à un état d'attente/fixe, fixer le passager au centre de sa cellule
+            # Si on passe à un état d'attente/fixe, fixer le passager
             # Pour éviter l'oscillation et le mouvement de microtremblement
             if new_state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE, 
                             PassengerState.ATTEND_EMBARQUEMENT, PassengerState.EMBARQUEMENT):
-                self.x = int(self.x) + 0.5
-                self.y = int(self.y) + 0.5
+                # Si une position assignée est disponible, l'utiliser
+                if self.assigned_target_pos is not None:
+                    self.x, self.y = self.assigned_target_pos
+                else:
+                    # Sinon, fixer au centre de la cellule
+                    self.x = int(self.x) + 0.5
+                    self.y = int(self.y) + 0.5
                 self.dir = (0.0, 0.0)  # Aucune direction de déplacement
             
             if self.event_bus:
@@ -102,11 +113,16 @@ class Passenger:
         """Retourne la carte de distance vers l'objectif actuel."""
         # Seuls les états de DÉPLACEMENT ont une cible active
         if self.state == PassengerState.VA_ENREGISTREMENT:
+            if self.assigned_target_cell:
+                return airport.get_dist(self.assigned_target_cell)
             return airport.dist_checkin
         elif self.state == PassengerState.VA_SECURITE:
+            if self.assigned_target_cell:
+                return airport.get_dist(self.assigned_target_cell)
             return airport.dist_secu
         elif self.state == PassengerState.VA_PORTE:
-            # Aller au lounge d'attente
+            if self.assigned_target_cell:
+                return airport.get_dist(self.assigned_target_cell)
             if self.is_vip:
                 return airport.dist_vip_gate
             return airport.dist_gate
@@ -118,19 +134,22 @@ class Passenger:
     
     def get_target_pos(self, airport):
         """Retourne la position cible."""
+        # Si une position assignée est disponible, l'utiliser en priorité
+        if self.assigned_target_pos is not None:
+            return self.assigned_target_pos
+        
         # Seuls les états de DÉPLACEMENT ont une cible active
         if self.state == PassengerState.VA_ENREGISTREMENT:
-            # Si assigné à une zone, utiliser sa position; sinon, le centre
             if self.assigned_checkin_zone and self.assigned_checkin_zone.position:
                 return self.assigned_checkin_zone.position
             return airport.target_checkin
         elif self.state == PassengerState.VA_SECURITE:
-            # Si assigné à une zone, utiliser sa position; sinon, le centre
             if self.assigned_security_zone and self.assigned_security_zone.position:
                 return self.assigned_security_zone.position
             return airport.target_secu
         elif self.state == PassengerState.VA_PORTE:
-            # Aller au lounge d'attente
+            if self.assigned_lounge_block and self.assigned_lounge_block.position:
+                return self.assigned_lounge_block.position
             if self.is_vip:
                 return airport.target_vip_gate
             return airport.target_gate
@@ -340,8 +359,8 @@ class QueueZone:
 
 class ServiceZone:
     """
-    Zone de service générique (check-in ou sécurité) avec 2 agents.
-    Chaque zone traite 2 passagers simultanément.
+    Zone de service générique (check-in ou sécurité) avec slots.
+    Chaque zone peut traiter 2 passagers simultanément (2 slots).
     """
     
     def __init__(self, zone_id, name, position=None, capacity=2, service_time=3.0, event_bus=None):
@@ -352,20 +371,65 @@ class ServiceZone:
             zone_id: identifiant unique
             name: nom (ex "Check-in 1", "Sécurité 1")
             position: tuple (x, y) de la position physique sur la carte
-            capacity: nombre de passagers en parallèle (2 agents)
+            capacity: nombre de slots (2 agents = 2 slots)
             service_time: temps pour servir un passager
             event_bus: EventBus
         """
         self.zone_id = zone_id
         self.name = name
         self.position = position  # (x, y) sur la carte
-        self.normal_queue = []
-        self.vip_queue = []
         self.capacity = capacity
         self.service_time = service_time
-        self.current_passengers = []  # Liste de passagers en cours
-        self.timers = []  # Timers pour chaque passager
         self.event_bus = event_bus
+        
+        # Slots : chaque slot contient [passenger, timer]
+        self.slots = [[None, 0.0] for _ in range(capacity)]
+        
+        # Offsets visuels pour chaque slot (pour affichage à des positions différentes)
+        self.slot_offsets = [(-0.25, 0.0), (0.25, 0.0)]
+        
+        # Files d'attente
+        self.normal_queue = []
+        self.vip_queue = []
+    
+    def has_free_slot(self):
+        """Teste si un slot est libre."""
+        return any(slot[0] is None for slot in self.slots)
+    
+    def reserve_slot(self, passenger):
+        """
+        Réserve un slot pour un passager.
+        
+        Returns:
+            Index du slot réservé, ou None si pas de slot libre
+        """
+        for i, slot in enumerate(self.slots):
+            if slot[0] is None:
+                self.slots[i][0] = passenger
+                self.slots[i][1] = 0.0  # Réinitialiser le timer
+                return i
+        return None
+    
+    def release_slot(self, passenger):
+        """Libère le slot occupé par un passager."""
+        for i, slot in enumerate(self.slots):
+            if slot[0] is passenger:
+                self.slots[i][0] = None
+                self.slots[i][1] = 0.0
+                return
+    
+    def get_slot_position(self, slot_index):
+        """
+        Retourne la position précise du slot.
+        
+        Returns:
+            (x.xx, y.yy) dans la case de la zone
+        """
+        if not self.position or slot_index >= len(self.slot_offsets):
+            return self.position
+        
+        ox, oy = self.slot_offsets[slot_index]
+        return (self.position[0] + 0.5 + ox, self.position[1] + 0.5 + oy)
     
     def enqueue(self, passenger):
         """Ajoute un passager à la file."""
@@ -373,14 +437,6 @@ class ServiceZone:
             self.vip_queue.append(passenger)
         else:
             self.normal_queue.append(passenger)
-    
-    def has_space(self):
-        """Teste si la zone peut accepter un nouveau passager."""
-        return len(self.current_passengers) < self.capacity
-    
-    def can_accept(self):
-        """Teste si la zone peut accepter un passager (file + en cours)."""
-        return len(self.normal_queue) + len(self.vip_queue) + len(self.current_passengers) < 20
     
     def update(self, dt):
         """
@@ -391,34 +447,36 @@ class ServiceZone:
         """
         served = []
         
-        # Faire monter les passagers en attente
-        while self.has_space() and (self.vip_queue or self.normal_queue):
+        # Faire monter les passagers en attente dans les slots libres
+        while self.has_free_slot() and (self.vip_queue or self.normal_queue):
             if self.vip_queue:
                 p = self.vip_queue.pop(0)
             else:
                 p = self.normal_queue.pop(0)
-            self.current_passengers.append(p)
-            self.timers.append(0.0)
+            self.reserve_slot(p)
         
         # Mettre à jour les timers
-        for i in range(len(self.current_passengers) - 1, -1, -1):
-            self.timers[i] += dt
-            
-            if self.timers[i] >= self.service_time:
-                served.append(self.current_passengers.pop(i))
-                self.timers.pop(i)
+        for i in range(len(self.slots)):
+            if self.slots[i][0] is not None:
+                self.slots[i][1] += dt
                 
-                if self.event_bus:
-                    self.event_bus.publish("passenger_served", {
-                        "passenger_id": served[-1].id,
-                        "zone": self.name
-                    })
+                if self.slots[i][1] >= self.service_time:
+                    served.append(self.slots[i][0])
+                    self.release_slot(self.slots[i][0])
+                    
+                    if self.event_bus:
+                        self.event_bus.publish("passenger_served", {
+                            "passenger_id": served[-1].id,
+                            "zone": self.name
+                        })
         
         return served
     
     def size(self):
         """Retourne le nombre de passagers en attente ou en cours."""
-        return len(self.normal_queue) + len(self.vip_queue) + len(self.current_passengers)
+        total = len(self.normal_queue) + len(self.vip_queue)
+        total += sum(1 for slot in self.slots if slot[0] is not None)
+        return total
 
 
 class Spawner:
@@ -549,38 +607,83 @@ class CheckinDesk:
 
 
 class LoungeBlock:
-    """Représente un bloc du lounge accueillant max 10 passagers."""
+    """Représente un bloc du lounge (une seule case S) accueillant max 5 passagers."""
     
-    def __init__(self, block_id, capacity=10):
+    def __init__(self, block_id, position=None, capacity=5):
         """
         Crée un bloc de lounge.
         
         Args:
             block_id: identifiant unique du bloc
-            capacity: nombre max de passagers
+            position: tuple (x, y) de la position physique sur la carte
+            capacity: nombre max de passagers (5 pour remplir les 5 slots visuels)
         """
         self.block_id = block_id
+        self.position = position  # (x, y) sur la carte
         self.capacity = capacity
-        self.passengers = []
+        
+        # Slots : chaque slot contient le passager
+        self.slots = [None] * capacity
+        
+        # Offsets visuels pour chaque slot : 4 coins + centre
+        self.slot_offsets = [
+            (-0.25, -0.25),  # coin haut gauche
+            (0.25, -0.25),   # coin haut droit
+            (-0.25, 0.25),   # coin bas gauche
+            (0.25, 0.25),    # coin bas droit
+            (0.0, 0.0)       # centre
+        ]
     
-    def can_accept(self):
-        """Teste si le bloc peut accepter un passager de plus."""
-        return len(self.passengers) < self.capacity
+    def has_free_slot(self):
+        """Teste si un slot est libre."""
+        return any(slot is None for slot in self.slots)
+    
+    def reserve_slot(self, passenger):
+        """
+        Réserve un slot pour un passager.
+        
+        Returns:
+            Index du slot réservé, ou None si pas de slot libre
+        """
+        for i in range(len(self.slots)):
+            if self.slots[i] is None:
+                self.slots[i] = passenger
+                return i
+        return None
+    
+    def release_slot(self, passenger):
+        """Libère le slot occupé par un passager."""
+        for i in range(len(self.slots)):
+            if self.slots[i] is passenger:
+                self.slots[i] = None
+                return
+    
+    def get_slot_position(self, slot_index):
+        """
+        Retourne la position précise du slot.
+        
+        Returns:
+            (x.xx, y.yy) dans la case du lounge
+        """
+        if not self.position or slot_index >= len(self.slot_offsets):
+            return self.position
+        
+        ox, oy = self.slot_offsets[slot_index]
+        return (self.position[0] + 0.5 + ox, self.position[1] + 0.5 + oy)
     
     def add_passenger(self, passenger):
-        """Ajoute un passager au bloc."""
-        if self.can_accept():
-            self.passengers.append(passenger)
-            return True
-        return False
+        """Ajoute un passager au bloc (pour compatibilité)."""
+        return self.reserve_slot(passenger) is not None
     
     def remove_passenger(self, passenger):
         """Retire un passager du bloc."""
-        if passenger in self.passengers:
-            self.passengers.remove(passenger)
-            return True
-        return False
+        self.release_slot(passenger)
+        return True
+    
+    def can_accept(self):
+        """Teste si le bloc peut accepter un passager de plus."""
+        return self.has_free_slot()
     
     def size(self):
         """Retourne le nombre de passagers dans le bloc."""
-        return len(self.passengers)
+        return sum(1 for slot in self.slots if slot is not None)
