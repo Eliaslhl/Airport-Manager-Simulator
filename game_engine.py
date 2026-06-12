@@ -155,7 +155,11 @@ class GameEngine:
             if p.assigned_checkin_zone:
                 p.assigned_checkin_zone.release_slot(p)
             
-            # Assigner immédiatement une sécurité
+            # Réinitialiser les assignations check-in
+            p.assigned_checkin_zone = None
+            p.assigned_checkin_slot = None
+            
+            # Assigner une sécurité
             security_zone = self.find_free_service_zone(self.security_zones)
             if security_zone:
                 slot_idx = security_zone.reserve_slot(p)
@@ -177,7 +181,11 @@ class GameEngine:
             if p.assigned_security_zone:
                 p.assigned_security_zone.release_slot(p)
             
-            # Assigner immédiatement un lounge
+            # Réinitialiser les assignations sécurité
+            p.assigned_security_zone = None
+            p.assigned_security_slot = None
+            
+            # Assigner un lounge
             lounge_blocks = self.vip_lounge_blocks if p.is_vip else self.lounge_blocks
             lounge_zone = self.find_free_lounge_block(lounge_blocks)
             if lounge_zone:
@@ -266,13 +274,13 @@ class GameEngine:
         
         elif p.state == PassengerState.VA_ENREGISTREMENT:
             # Se déplacer vers le check-in assigné
-            if p.near_target(p.assigned_target_pos, 0.6):
+            if p.assigned_target_pos and p.near_target(p.assigned_target_pos, 0.6):
                 # Arrivé au check-in
                 # Fixer exactement sur la position du slot
                 p.x, p.y = p.assigned_target_pos
-                # Ajouter à la file d'attente du check-in
+                # Démarrer le service (timer commence maintenant)
                 if p.assigned_checkin_zone:
-                    p.assigned_checkin_zone.enqueue(p)
+                    p.assigned_checkin_zone.start_service(p)
                 p.set_state(PassengerState.ATTEND_ENREGISTREMENT)
         
         elif p.state == PassengerState.ATTEND_ENREGISTREMENT:
@@ -281,12 +289,12 @@ class GameEngine:
         
         elif p.state == PassengerState.VA_SECURITE:
             # Se déplacer vers la sécurité assignée
-            if p.near_target(p.assigned_target_pos, 0.6):
+            if p.assigned_target_pos and p.near_target(p.assigned_target_pos, 0.6):
                 # Arrivé à la sécurité
                 p.x, p.y = p.assigned_target_pos
-                # Ajouter à la file d'attente de la sécurité
+                # Démarrer le service (timer commence maintenant)
                 if p.assigned_security_zone:
-                    p.assigned_security_zone.enqueue(p)
+                    p.assigned_security_zone.start_service(p)
                 p.set_state(PassengerState.ATTEND_SECURITE)
         
         elif p.state == PassengerState.ATTEND_SECURITE:

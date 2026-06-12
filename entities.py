@@ -361,6 +361,11 @@ class ServiceZone:
     """
     Zone de service générique (check-in ou sécurité) avec slots.
     Chaque zone peut traiter 2 passagers simultanément (2 slots).
+    
+    Chaque slot a 3 états:
+    - passenger: None si libre, sinon le passager réservé/en service
+    - timer: temps écoulé du service (seulement incrémenté si active=True)
+    - active: True si le passager est physiquement arrivé et en service, False si en route
     """
     
     def __init__(self, zone_id, name, position=None, capacity=2, service_time=3.0, event_bus=None):
@@ -382,41 +387,70 @@ class ServiceZone:
         self.service_time = service_time
         self.event_bus = event_bus
         
-        # Slots : chaque slot contient [passenger, timer]
-        self.slots = [[None, 0.0] for _ in range(capacity)]
+        # Slots : dictionnaire avec passenger, timer, active
+        self.slots = [
+            {
+                "passenger": None,
+                "timer": 0.0,
+                "active": False
+            }
+            for _ in range(capacity)
+        ]
         
         # Offsets visuels pour chaque slot (pour affichage à des positions différentes)
         self.slot_offsets = [(-0.25, 0.0), (0.25, 0.0)]
         
-        # Files d'attente
+        # Files d'attente (plus utilisées maintenant)
         self.normal_queue = []
         self.vip_queue = []
     
     def has_free_slot(self):
-        """Teste si un slot est libre."""
-        return any(slot[0] is None for slot in self.slots)
+        """Teste si un slot est libre (pas de passager réservé)."""
+        return any(slot["passenger"] is None for slot in self.slots)
     
     def reserve_slot(self, passenger):
         """
         Réserve un slot pour un passager.
         
+        Le passager est marqué comme "en route" (active=False).
+        Le timer ne commencera qu'après start_service().
+        
         Returns:
             Index du slot réservé, ou None si pas de slot libre
         """
         for i, slot in enumerate(self.slots):
-            if slot[0] is None:
-                self.slots[i][0] = passenger
-                self.slots[i][1] = 0.0  # Réinitialiser le timer
+            if slot["passenger"] is None:
+                self.slots[i]["passenger"] = passenger
+                self.slots[i]["timer"] = 0.0
+                self.slots[i]["active"] = False
                 return i
         return None
     
+    def start_service(self, passenger):
+        """
+        Démarre le service pour un passager déjà réservé.
+        
+        Appelée seulement quand le passager arrive physiquement à la zone.
+        
+        Returns:
+            True si le service a démarré, False si le passager n'était pas trouvé
+        """
+        for slot in self.slots:
+            if slot["passenger"] is passenger:
+                slot["timer"] = 0.0
+                slot["active"] = True
+                return True
+        return False
+    
     def release_slot(self, passenger):
         """Libère le slot occupé par un passager."""
-        for i, slot in enumerate(self.slots):
-            if slot[0] is passenger:
-                self.slots[i][0] = None
-                self.slots[i][1] = 0.0
-                return
+        for slot in self.slots:
+            if slot["passenger"] is passenger:
+                slot["passenger"] = None
+                slot["timer"] = 0.0
+                slot["active"] = False
+                return True
+        return False
     
     def get_slot_position(self, slot_index):
         """
@@ -432,7 +466,7 @@ class ServiceZone:
         return (self.position[0] + 0.5 + ox, self.position[1] + 0.5 + oy)
     
     def enqueue(self, passenger):
-        """Ajoute un passager à la file."""
+        """Ajoute un passager à la file (obsolète - ne plus utiliser)."""
         if passenger.is_vip:
             self.vip_queue.append(passenger)
         else:
@@ -442,40 +476,45 @@ class ServiceZone:
         """
         Met à jour la zone.
         
+        Incrémente le timer SEULEMENT pour les slots actifs.
+        Retourne les passagers qui viennent de finir leur service.
+        
         Returns:
             Liste des passagers qui viennent d'être servis
         """
         served = []
         
-        # Faire monter les passagers en attente dans les slots libres
-        while self.has_free_slot() and (self.vip_queue or self.normal_queue):
-            if self.vip_queue:
-                p = self.vip_queue.pop(0)
-            else:
-                p = self.normal_queue.pop(0)
-            self.reserve_slot(p)
-        
-        # Mettre à jour les timers
-        for i in range(len(self.slots)):
-            if self.slots[i][0] is not None:
-                self.slots[i][1] += dt
+        # Mettre à jour les timers uniquement pour les slots actifs
+        for slot in self.slots:
+            passenger = slot["passenger"]
+            
+            if passenger is None:
+                continue
+            
+            if not slot["active"]:
+                # Passager en route, pas encore arrivé
+                continue
+            
+            # Passager actif : incrémenter le timer
+            slot["timer"] += dt
+            
+            if slot["timer"] >= self.service_time:
+                # Service terminé
+                served.append(passenger)
+                self.release_slot(passenger)
                 
-                if self.slots[i][1] >= self.service_time:
-                    served.append(self.slots[i][0])
-                    self.release_slot(self.slots[i][0])
-                    
-                    if self.event_bus:
-                        self.event_bus.publish("passenger_served", {
-                            "passenger_id": served[-1].id,
-                            "zone": self.name
-                        })
+                if self.event_bus:
+                    self.event_bus.publish("passenger_served", {
+                        "passenger_id": passenger.id,
+                        "zone": self.name
+                    })
         
         return served
     
     def size(self):
         """Retourne le nombre de passagers en attente ou en cours."""
         total = len(self.normal_queue) + len(self.vip_queue)
-        total += sum(1 for slot in self.slots if slot[0] is not None)
+        total += sum(1 for slot in self.slots if slot["passenger"] is not None)
         return total
 
 
