@@ -127,6 +127,91 @@ class GameEngine:
                 return block
         return None
     
+    def has_vip_not_finished(self):
+        """
+        Teste s'il reste au moins un VIP qui n'est pas encore TERMINE.
+        
+        Returns:
+            True si un VIP est encore en route ou en service
+        """
+        return any(
+            p.is_vip and p.state != PassengerState.TERMINE
+            for p in self.passengers
+        )
+    
+    def _start_boarding_passenger(self, p):
+        """
+        Lance un passager vers l'embarquement.
+        
+        Appelé quand le passager doit passer en VA_EMBARQUER.
+        """
+        # Libérer le slot lounge
+        if p.assigned_lounge_block:
+            p.assigned_lounge_block.release_slot(p)
+            p.assigned_lounge_block = None
+            p.assigned_lounge_slot = None
+        
+        # Réinitialiser les références de bloc courant
+        if p.is_vip:
+            p.current_vip_lounge_block = None
+        else:
+            p.current_lounge_block = None
+        
+        # Très important : changer la cible vers la vraie porte d'embarquement
+        gate = self.airport.target_embarkation
+        p.assigned_target_cell = gate
+        p.assigned_target_pos = (gate[0] + 0.5, gate[1] + 0.5)
+        
+        p.set_state(PassengerState.VA_EMBARQUER)
+    
+    def _handle_boarding_priority(self):
+        """
+        Gère la priorité d'embarquement : VIP avant normaux.
+        
+        Appelée une fois par frame pour lancer les prochains passagers en embarquement.
+        """
+        if not self.plane or not self.plane.boarding_open:
+            return
+        
+        # Vérifier s'il y a déjà des passagers en cours d'embarquement
+        active_boarding = [
+            p for p in self.passengers
+            if p.state in (PassengerState.VA_EMBARQUER, PassengerState.EMBARQUEMENT)
+        ]
+        
+        # S'il y a déjà 2 passagers en cours d'embarquement, ne pas en lancer d'autres
+        if len(active_boarding) >= 2:
+            return
+        
+        # Les VIP ont priorité
+        vip_waiting = [
+            p for p in self.passengers
+            if p.is_vip and p.state == PassengerState.ATTEND_EMBARQUEMENT
+        ]
+        
+        if vip_waiting:
+            # Lancer les VIP qui attendent (jusqu'à 2 au total)
+            slots_available = 2 - len(active_boarding)
+            for p in vip_waiting[:slots_available]:
+                self._start_boarding_passenger(p)
+            return
+        
+        # S'il reste des VIP ailleurs dans le parcours, les normaux doivent attendre
+        if self.has_vip_not_finished():
+            return
+        
+        # Tous les VIP sont TERMINE : les normaux peuvent embarquer
+        normal_waiting = [
+            p for p in self.passengers
+            if not p.is_vip and p.state == PassengerState.ATTEND_EMBARQUEMENT
+        ]
+        
+        if normal_waiting:
+            # Lancer les normaux qui attendent (jusqu'à 2 au total)
+            slots_available = 2 - len(active_boarding)
+            for p in normal_waiting[:slots_available]:
+                self._start_boarding_passenger(p)
+    
     def update(self, dt, elapsed_time):
         """
         Met à jour le jeu (une frame).
@@ -213,6 +298,9 @@ class GameEngine:
             
             # Patience
             p.update_patience(dt)
+        
+        # Gestion des priorités d'embarquement VIP vs normaux
+        self._handle_boarding_priority()
         
         # Gestion du timing d'embarquement (2 par 2 avec 2s d'intervalle)
         # Compter les passagers actuellement en VA_EMBARQUER ou EMBARQUEMENT
@@ -312,58 +400,23 @@ class GameEngine:
             # Passager au lounge : attendant l'embarquement
             # Le lounge a déjà été assigné lors de la transition ATTEND_SECURITE → VA_PORTE
             
+            # Assurer que le passager est enregistré dans son bloc lounge
             if p.is_vip:
-                # VIP lounge
                 if p.current_vip_lounge_block is None and p.assigned_lounge_block:
-                    # Ajouter au bloc lounge assigné
                     p.assigned_lounge_block.add_passenger(p)
                     p.current_vip_lounge_block = p.assigned_lounge_block
-                
-                # Attendre ouverture embarquement
-                if self.plane.boarding_open:
-                    # Les VIP embarquent en premier (2 par 2)
-                    # Compter combien de VIP sont actuellement en mouvement/embarquement
-                    vip_in_boarding = sum(1 for pass_check in self.passengers 
-                                         if pass_check.is_vip and 
-                                         pass_check.state in (PassengerState.VA_EMBARQUER, PassengerState.EMBARQUEMENT))
-                    
-                    # Si moins de 2 VIP embarquent, laisser ce VIP embarquer
-                    if vip_in_boarding < 2:
-                        if p.current_vip_lounge_block:
-                            p.current_vip_lounge_block.remove_passenger(p)
-                            p.current_vip_lounge_block = None
-                        p.set_state(PassengerState.VA_EMBARQUER)
             else:
-                # Lounge normal
                 if p.current_lounge_block is None and p.assigned_lounge_block:
-                    # Ajouter au bloc lounge assigné
                     p.assigned_lounge_block.add_passenger(p)
                     p.current_lounge_block = p.assigned_lounge_block
-                
-                # Embarquement: vérifier que l'embarquement est ouvert ET qu'il n'y a plus de VIP en attente
-                if self.plane.boarding_open:
-                    # Compter les VIP qui sont encore en VA_EMBARQUER ou EMBARQUEMENT
-                    vip_still_boarding = sum(1 for pass_check in self.passengers 
-                                            if pass_check.is_vip and 
-                                            pass_check.state in (PassengerState.VA_EMBARQUER, PassengerState.EMBARQUEMENT))
-                    
-                    # Les normaux n'embarquent que si aucun VIP n'embarque
-                    if vip_still_boarding == 0:
-                        # Compter combien de passagers normaux embarquent (2 par 2)
-                        normal_in_boarding = sum(1 for pass_check in self.passengers 
-                                                if not pass_check.is_vip and 
-                                                pass_check.state in (PassengerState.VA_EMBARQUER, PassengerState.EMBARQUEMENT))
-                        
-                        # Si moins de 2 embarquent, laisser celui-ci embarquer
-                        if normal_in_boarding < 2:
-                            if p.current_lounge_block:
-                                p.current_lounge_block.remove_passenger(p)
-                                p.current_lounge_block = None
-                            p.set_state(PassengerState.VA_EMBARQUER)
+            
+            # L'embarquement est géré par _handle_boarding_priority() appelée dans update()
+            pass
         
         elif p.state == PassengerState.VA_EMBARQUER:
-            # Aller vers la porte (G)
-            if p.near_target(self.airport.gates[0], 1.8):
+            # Aller vers la porte (utiliser la cible assignée)
+            if p.assigned_target_pos and p.near_target(p.assigned_target_pos, 0.6):
+                p.x, p.y = p.assigned_target_pos
                 p.set_state(PassengerState.EMBARQUEMENT)
                 p.boarding_timer = 0.0
         
