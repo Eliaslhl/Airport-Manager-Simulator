@@ -47,7 +47,6 @@ def main():
     engine = GameEngine(AIRPORT_MAP)
     airport = AirportMap(AIRPORT_MAP)
     
-    # DEBUG: Afficher les positions clés
     print(f"DEBUG: Spawn position: {engine.airport.spawn}")
     print(f"DEBUG: Checkins: {engine.airport.checkins_ordered}")
     print(f"DEBUG: Secus: {engine.airport.secus_ordered}")
@@ -104,16 +103,27 @@ def main():
                     state["score"],
                     remaining,
                     state["nb_boarded"],
-                    state["plane_state"]
+                    state["plane_state"],
+                    missed_passengers=state["missed_passengers"],
+                    total_passengers=state["total_passengers"],
+                    success_rate=state["success_rate"],
+                    final_bonus_points=state["final_bonus_points"],
                 )
         
         clock.tick(FPS)
     
     # Écran de fin
     state = engine.get_state()
-    screen.draw_end_screen(state["nb_boarded"], state["score"])
+    screen.draw_end_screen(
+        state["nb_boarded"],
+        state["score"],
+        missed_passengers=state["missed_passengers"],
+        total_passengers=state["total_passengers"],
+        success_rate=state["success_rate"],
+        final_bonus_points=state["final_bonus_points"],
+        score_details=state["score_details"],
+    )
     
-    # Attendre avant de quitter
     waiting = True
     while waiting:
         for e in pygame.event.get():

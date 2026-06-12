@@ -21,47 +21,36 @@ class AirportMap:
         self.planes = self._find('A')
         self.lounges = self._find('S')  # Zones de lounge normales
         self.vip_lounges = self._find('V')  # Zones de lounge VIP
-        # Zones commerciales : B = boutique, K = café (K optionnel)
         self.commerces = self._find('B') + self._find('K')
         
-        # Grouper les lounges par colonne X
         from collections import defaultdict
         lounge_columns = defaultdict(list)
         for x, y in self.lounges:
             lounge_columns[x].append((x, y))
         
-        # Créer une liste des colonnes de lounge (triées par X)
         self.lounge_column_list = [
             lounge_columns[x] for x in sorted(lounge_columns.keys())
         ]
         
-        # Grouper les VIP lounges par colonne X
         vip_lounge_columns = defaultdict(list)
         for x, y in self.vip_lounges:
             vip_lounge_columns[x].append((x, y))
         
-        # Créer une liste des colonnes VIP lounge (triées par X)
         self.vip_lounge_column_list = [
             vip_lounge_columns[x] for x in sorted(vip_lounge_columns.keys())
         ]
         
-        # Listes ordonnées : du plus loin (X grand) vers le plus proche (X petit)
         self.checkins_ordered = sorted(self.checkins, key=lambda p: (p[0], p[1]), reverse=True)
         self.secus_ordered = sorted(self.secus, key=lambda p: (p[0], p[1]), reverse=True)
         self.lounges_ordered = sorted(self.lounges, key=lambda p: (p[0], p[1]), reverse=True)
         self.vip_lounges_ordered = sorted(self.vip_lounges, key=lambda p: (p[0], p[1]), reverse=True)
         self.commerces_ordered = sorted(self.commerces, key=lambda p: (p[0], p[1]), reverse=True)
         
-        # Points cibles (centre de chaque zone)
         self.target_checkin = self.checkins[len(self.checkins) // 2]
         self.target_secu = self.secus[len(self.secus) // 2]
-        # Pour le lounge : utiliser la PREMIERE colonne de lounge (gauche)
         self.target_gate = self.lounge_column_list[0][0] if self.lounge_column_list else self.gates[0]
-        # Pour le VIP lounge : utiliser la première colonne VIP lounge
         self.target_vip_gate = self.vip_lounge_column_list[0][0] if self.vip_lounge_column_list else self.target_gate
-        # Pour l'embarquement : la vraie porte
         self.target_embarkation = self.gates[0]
-        # Pour le commerce : première case commerciale disponible, sinon pas de détour
         self.target_commerce = self.commerces_ordered[0] if self.commerces_ordered else None
         
         # Cache des cartes de distance
@@ -73,7 +62,7 @@ class AirportMap:
         self.dist_embarkation = self.get_dist(self.target_embarkation)
         self.dist_commerce = self.get_dist(self.target_commerce) if self.target_commerce is not None else None
         
-        # Matrice de densité (nombre de passagers par cellule)
+        # Matrice de densité 
         self.densite = np.zeros((self.W, self.H), dtype=np.int32)
     
     def _parse(self, text):
@@ -126,27 +115,22 @@ class AirportMap:
         """
         ix, iy = int(x), int(y)
         
-        # Vérifier que la cellule actuelle est valide
         if not self.walkable(ix, iy):
             return None
         
         current_dist = target_dist[ix, iy]
         neighbors = [(ix+1, iy), (ix-1, iy), (ix, iy+1), (ix, iy-1)]
         
-        # Filtre les cellules marchables ET qui se rapprochent (ou du moins qui ne s'éloignent pas)
         valid = []
         for nx, ny in neighbors:
             if not self.walkable(nx, ny):
                 continue
             
             next_dist = target_dist[nx, ny]
-            
-            # Accepter les cellules qui se rapprochent strictement OU qui sont à la même distance
-            # (pour éviter les blocages sur les plateaux)
+
             if next_dist > current_dist:
                 continue
-            
-            # Évite les zones surpeuplées
+
             if avoid_overcrowding and self.densite[nx, ny] >= 6:
                 continue
             
@@ -155,7 +139,6 @@ class AirportMap:
         if not valid:
             return None
         
-        # Retourne la cellule avec la meilleure distance vers la cible
         best = min(valid, key=lambda p: target_dist[p[0], p[1]])
         return best
 
@@ -164,12 +147,9 @@ class AirportMap:
 def _calc_bfs(dist, grid, w, h, tx, ty):
     """
     Calcule la carte de distance via BFS depuis une cible.
-    CORRECTION : initialise UNIQUEMENT la cible à 0, puis propage.
     """
-    # Initialise seulement la cible
-    dist[tx, ty] = 0
     
-    # Propage via BFS jusqu'à convergence
+    dist[tx, ty] = 0
     changed = True
     max_iterations = 1000
     iteration = 0

@@ -50,7 +50,7 @@ class Screen:
             title: titre de la fenêtre
         """
         self.W = nx * ZOOM
-        self.H = (ny + 5) * ZOOM  # +5 au lieu de +3 pour plus d'espace
+        self.H = (ny + 5) * ZOOM
         
         pygame.display.init()
         pygame.font.init()
@@ -97,13 +97,16 @@ class Screen:
         surf = font.render(str(txt), True, color)
         self.surface.blit(surf, (sx, sy))
     
-    def drawHUD(self, score, remaining, nb_passengers, nb_boarded, plane_state):
+    def drawHUD(self, score, remaining, nb_passengers, nb_boarded, plane_state,
+                missed_passengers=0, total_passengers=0, success_rate=0.0, final_bonus_points=0):
         """Dessine l'interface utilisateur en bas."""
-        hud_y = self.H - 3 * ZOOM  # Ajusté pour le nouvel espace
+        hud_y = self.H - 3 * ZOOM  
         pygame.draw.rect(self.surface, (15, 15, 25), (0, hud_y, self.W, 3 * ZOOM))
         
         state_str = ["EN ATTENTE", "EMBARQUEMENT", "PARTI"][plane_state]
         state_color = [Color.yellow, Color.green, Color.red][plane_state]
+        total = total_passengers or max(nb_boarded + missed_passengers + nb_passengers, 1)
+        percent = int(success_rate * 100)
         
         self.surface.blit(
             self.font_big.render(f"SCORE: {score}", True, Color.cyan),
@@ -119,11 +122,19 @@ class Screen:
         )
         self.surface.blit(
             self.font_small.render(
-                f"Passagers: {nb_passengers}  Embarqués: {nb_boarded}",
+                f"Actifs: {nb_passengers}  Embarqués: {nb_boarded}/{total}  Ratés: {missed_passengers}  Réussite: {percent}%",
                 True,
                 Color.gray
             ),
             (10, hud_y + 40)
+        )
+        self.surface.blit(
+            self.font_small.render(
+                f"Barème: check-in +5 | sécurité +8 | lounge +5 | normal +30 | VIP +45 | bonus final +{final_bonus_points}",
+                True,
+                Color.gray
+            ),
+            (10, hud_y + 60)
         )
     
     def show(self):
@@ -134,33 +145,51 @@ class Screen:
         """Efface l'écran."""
         self.surface.fill(Color.dark)
     
-    def draw_end_screen(self, nb_boarded, score):
+    def draw_end_screen(self, nb_boarded, score, missed_passengers=0, total_passengers=0,
+                        success_rate=0.0, final_bonus_points=0, score_details=None):
         """Affiche l'écran de fin."""
         self.clear()
+        total = total_passengers or max(nb_boarded + missed_passengers, 1)
+        percent = int(success_rate * 100)
+        details = score_details or {}
+
         lines = [
             "═══ SIMULATION TERMINÉE ═══",
-            f"Passagers embarqués : {nb_boarded}",
+            f"Passagers embarqués : {nb_boarded}/{total}  ({percent}%)",
+            f"Passagers ratés : {missed_passengers}",
+            f"Bonus final : +{final_bonus_points}",
             f"Score final : {score}",
             "Appuyez sur une touche pour quitter",
         ]
-        colors = [Color.cyan, Color.green, Color.yellow, Color.gray]
+        colors = [Color.cyan, Color.green, Color.orange, Color.yellow, Color.yellow, Color.gray]
+
+        if details:
+            lines.insert(5, (
+                "Détail: "
+                f"check-in {details.get('checkin', 0)} | "
+                f"sécurité {details.get('security', 0)} | "
+                f"lounge {details.get('lounge', 0)} | "
+                f"embarquement {details.get('boarding', 0)} | "
+                f"pénalités {details.get('penalties', 0)}"
+            ))
+            colors.insert(5, Color.gray)
         
         for i, (line, col) in enumerate(zip(lines, colors)):
-            surf = self.font_big.render(line, True, col)
+            font = self.font_small if line.startswith("Détail:") else self.font_big
+            surf = font.render(line, True, col)
             self.surface.blit(
                 surf,
-                (self.W // 2 - surf.get_width() // 2, 150 + i * 50)
+                (self.W // 2 - surf.get_width() // 2, 120 + i * 42)
             )
         self.show()
 
 
-def draw_map(screen, airport, passengers, score, remaining, nb_boarded, plane_state):
+def draw_map(screen, airport, passengers, score, remaining, nb_boarded, plane_state,
+             missed_passengers=0, total_passengers=0, success_rate=0.0, final_bonus_points=0):
     """Dessine la carte complète."""
     screen.clear()
-    
-    # Mise à jour densité - ne pas compter les TERMINE
-    # (Ils auraient dû être supprimés de passengers dans game_engine, mais par sécurité...)
     airport.densite[:, :] = 0
+    
     for p in passengers:
         if p.state == PassengerState.TERMINE:
             continue
@@ -185,18 +214,14 @@ def draw_map(screen, airport, passengers, score, remaining, nb_boarded, plane_st
                 screen.drawRect(x, y, color)
                 screen.drawRect(x, y, Color.black, 1)
     
-    # Passagers (ne pas afficher ceux qui sont TERMINE)
     for p in passengers:
-        # Ne pas dessiner si le passager a embarqué (état TERMINE)
         if p.state == PassengerState.TERMINE:
             continue
         
         r = 0.35
         color = p.get_color()
         screen.drawCircle(p.x, p.y, r, color)
-        
-        # Flèche direction - seulement pour les états de déplacement
-        # Pas de flèche pour: ATTEND_ENREGISTREMENT, ATTEND_SECURITE, ATTEND_EMBARQUEMENT, EMBARQUEMENT, TERMINE
+
         moving_states = (
             PassengerState.ARRIVE,
             PassengerState.VA_ENREGISTREMENT,
@@ -220,5 +245,11 @@ def draw_map(screen, airport, passengers, score, remaining, nb_boarded, plane_st
                 C = (p.x - lx, p.y - ly)
                 screen.drawTriangle(A, B, C, Color.white)
     
-    screen.drawHUD(score, remaining, len(passengers), nb_boarded, plane_state)
+    screen.drawHUD(
+        score, remaining, len(passengers), nb_boarded, plane_state,
+        missed_passengers=missed_passengers,
+        total_passengers=total_passengers,
+        success_rate=success_rate,
+        final_bonus_points=final_bonus_points,
+    )
     screen.show()

@@ -1,11 +1,6 @@
-"""
-Entités du jeu : Passagers, Avion, Gestionnaires de files.
-"""
-
 import random
 import math
 from enum import IntEnum
-
 
 class PassengerState(IntEnum):
     """États d'un passager (machine à états)."""
@@ -16,12 +11,12 @@ class PassengerState(IntEnum):
     ATTEND_SECURITE = 4
     VA_PORTE = 5
     ATTEND_EMBARQUEMENT = 6
-    VA_COMMERCE = 7       # Détour dynamique vers la boutique/café
-    ATTEND_COMMERCE = 8   # Attente intelligente dans la zone commerciale
-    RETOUR_CHECKIN = 9    # Retour du commerce vers le check-in
-    RETOUR_SECURITE = 10  # Retour du commerce vers la sécurité
-    VA_EMBARQUER = 11     # Se déplace vers la porte pour embarquer
-    EMBARQUEMENT = 12     # À la porte, attend validation (1s)
+    VA_COMMERCE = 7       
+    ATTEND_COMMERCE = 8
+    RETOUR_CHECKIN = 9
+    RETOUR_SECURITE = 10
+    VA_EMBARQUER = 11
+    EMBARQUEMENT = 12
     TERMINE = 13
 
 
@@ -69,22 +64,21 @@ class Passenger:
         self.is_vip = is_vip
         self.speed = 1.8 + random.uniform(-0.3, 0.3)
         self.wait_timer = 0.0
-        self.patience = 60.0  # Secondes avant de s'énerver
+        self.patience = 60.0
         self.angry = False
         self.event_bus = event_bus
-        self.current_lounge_block = None  # Bloc du lounge occupé
-        self.current_vip_lounge_block = None  # Bloc du VIP lounge occupé
-        self.assigned_checkin_zone = None  # Zone de check-in assignée
-        self.assigned_security_zone = None  # Zone de sécurité assignée
-        self.assigned_lounge_block = None  # Bloc de lounge assigné
-        self.assigned_checkin_slot = None  # Index du slot dans la zone check-in
-        self.assigned_security_slot = None  # Index du slot dans la zone sécurité
-        self.assigned_lounge_slot = None  # Index du slot dans le bloc lounge
-        self.assigned_target_cell = None  # Position cible (x, y) entière
-        self.assigned_target_pos = None  # Position cible précise (x.xx, y.yy)
-        self.boarding_timer = 0.0  # Timer pour embarquement (1s)
+        self.current_lounge_block = None  
+        self.current_vip_lounge_block = None
+        self.assigned_checkin_zone = None
+        self.assigned_security_zone = None
+        self.assigned_lounge_block = None
+        self.assigned_checkin_slot = None
+        self.assigned_security_slot = None
+        self.assigned_lounge_slot = None
+        self.assigned_target_cell = None
+        self.assigned_target_pos = None
+        self.boarding_timer = 0.0
 
-        # Extension IA dynamique : détour temporaire vers la zone commerciale
         self.return_after_commerce = None  # "CHECKIN" ou "SECURITY"
         self.commerce_timer = 0.0
         self.used_commerce_for_checkin = False
@@ -103,19 +97,16 @@ class Passenger:
             self.state = new_state
             self.wait_timer = 0.0
             
-            # Si on passe à un état d'attente/fixe, fixer le passager
-            # Pour éviter l'oscillation et le mouvement de microtremblement
             if new_state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE,
                             PassengerState.ATTEND_EMBARQUEMENT, PassengerState.ATTEND_COMMERCE,
                             PassengerState.EMBARQUEMENT):
-                # Si une position assignée est disponible, l'utiliser
+                
                 if self.assigned_target_pos is not None:
                     self.x, self.y = self.assigned_target_pos
                 else:
-                    # Sinon, fixer au centre de la cellule
                     self.x = int(self.x) + 0.5
                     self.y = int(self.y) + 0.5
-                self.dir = (0.0, 0.0)  # Aucune direction de déplacement
+                self.dir = (0.0, 0.0) 
             
             if self.event_bus:
                 self.event_bus.publish("passenger_state_changed", {
@@ -126,8 +117,7 @@ class Passenger:
     
     def get_target_dist(self, airport):
         """Retourne la carte de distance vers l'objectif actuel."""
-        # Les destinations assignées par passager sont prioritaires.
-        # Cela permet d'aller vers un C/X/S/B précis au lieu d'une cible globale.
+        
         if self.state in (
             PassengerState.VA_ENREGISTREMENT,
             PassengerState.VA_SECURITE,
@@ -141,16 +131,12 @@ class Passenger:
             return None
 
         if self.state == PassengerState.VA_EMBARQUER:
-            # Aller à la vraie porte pour embarquer
             return airport.dist_embarkation
 
-        # Les états ATTEND_* et EMBARQUEMENT n'ont pas de cible active
         return None
 
     def get_target_pos(self, airport):
         """Retourne la position cible."""
-        # Si une position assignée est disponible, l'utiliser en priorité.
-        # Les états de retour depuis le commerce utilisent aussi assigned_target_pos.
         if self.assigned_target_pos is not None:
             return self.assigned_target_pos
 
@@ -178,11 +164,9 @@ class Passenger:
         if self.assigned_target_pos is None:
             return False
         
-        # Essai 1: Position exacte (avec tolérance)
         if self.near_target(self.assigned_target_pos, radius):
             return True
         
-        # Essai 2: Même cellule (plus tolérant)
         if self.assigned_target_cell is not None:
             tx, ty = self.assigned_target_cell
             if int(self.x) == tx and int(self.y) == ty:
@@ -192,12 +176,11 @@ class Passenger:
     
     def move(self, dt, airport):
         """Déplace le passager vers sa cible."""
-        # Les passagers en attente ou en embarquement ne bougent pas
-        # États fixes: ATTEND_ENREGISTREMENT, ATTEND_SECURITE, ATTEND_EMBARQUEMENT, EMBARQUEMENT, TERMINE
+        
         if self.state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE,
                          PassengerState.ATTEND_EMBARQUEMENT, PassengerState.ATTEND_COMMERCE,
                          PassengerState.EMBARQUEMENT, PassengerState.TERMINE):
-            self.dir = (0.0, 0.0)  # Aucune direction quand on est fixe
+            self.dir = (0.0, 0.0)  
             return
         
         dist_map = self.get_target_dist(airport)
@@ -205,8 +188,6 @@ class Passenger:
             self.dir = (0.0, 0.0)
             return
         
-        # Pour VA_EMBARQUER, ne pas éviter la foule (les passagers doivent pouvoir entrer dans la porte)
-        # Pour les autres états, éviter les zones surpeuplées
         avoid_crowding = (self.state != PassengerState.VA_EMBARQUER)
         
         next_move = airport.get_next_move(self.x, self.y, dist_map, avoid_overcrowding=avoid_crowding)
@@ -223,7 +204,6 @@ class Passenger:
             dx /= norm
             dy /= norm
         
-        # Appliquer la vitesse
         v = self.speed
         self.dir = (dx, dy)
         self.x += dx * v * dt
@@ -273,13 +253,11 @@ class Plane:
         """
         remaining = max(0.0, self.depart_time - elapsed)
         
-        # Transition vers embarquement
         if remaining <= 60.0 and self.state == PlaneState.WAITING:
             self.state = PlaneState.BOARDING
             if self.event_bus:
                 self.event_bus.publish("plane_boarding_opened", None)
         
-        # Transition vers départ
         if remaining <= 0 and self.state != PlaneState.DEPARTED:
             self.state = PlaneState.DEPARTED
             if self.event_bus:
@@ -296,7 +274,6 @@ class Plane:
 class QueueZone:
     """
     Gère une file d'attente avec support priorité VIP.
-    CORRECTED : Pas de "in_queue" flag bugué.
     """
     
     def __init__(self, name, capacity=10, service_time=3.0, event_bus=None):
@@ -344,7 +321,6 @@ class QueueZone:
         Returns:
             Le passager qui vient d'être servi (ou None)
         """
-        # Commence à servir le prochain passager si libre
         if self.current_passenger is None:
             self.current_passenger = self.dequeue()
             self.timer = 0.0
@@ -354,7 +330,6 @@ class QueueZone:
         
         self.timer += dt
         
-        # Passager fini de se faire servir
         if self.timer >= self.service_time:
             served = self.current_passenger
             self.current_passenger = None
@@ -392,11 +367,6 @@ class ServiceZone:
     """
     Zone de service générique (check-in ou sécurité) avec slots.
     Chaque zone peut traiter 2 passagers simultanément (2 slots).
-    
-    Chaque slot a 3 états:
-    - passenger: None si libre, sinon le passager réservé/en service
-    - timer: temps écoulé du service (seulement incrémenté si active=True)
-    - active: True si le passager est physiquement arrivé et en service, False si en route
     """
     
     def __init__(self, zone_id, name, position=None, capacity=2, service_time=3.0, event_bus=None):
@@ -418,7 +388,6 @@ class ServiceZone:
         self.service_time = service_time
         self.event_bus = event_bus
         
-        # Slots : dictionnaire avec passenger, timer, active
         self.slots = [
             {
                 "passenger": None,
@@ -428,10 +397,8 @@ class ServiceZone:
             for _ in range(capacity)
         ]
         
-        # Offsets visuels pour chaque slot (pour affichage à des positions différentes)
         self.slot_offsets = [(-0.25, 0.0), (0.25, 0.0)]
         
-        # Files d'attente (plus utilisées maintenant)
         self.normal_queue = []
         self.vip_queue = []
     
@@ -515,7 +482,6 @@ class ServiceZone:
         """
         served = []
         
-        # Mettre à jour les timers uniquement pour les slots actifs
         for slot in self.slots:
             passenger = slot["passenger"]
             
@@ -523,14 +489,11 @@ class ServiceZone:
                 continue
             
             if not slot["active"]:
-                # Passager en route, pas encore arrivé
                 continue
             
-            # Passager actif : incrémenter le timer
             slot["timer"] += dt
             
             if slot["timer"] >= self.service_time:
-                # Service terminé
                 served.append(passenger)
                 self.release_slot(passenger)
                 
@@ -570,7 +533,6 @@ class Spawner:
         self.accu = 0.0
         self.rate = rate
         self.event_bus = event_bus
-        # Calculer le nombre de VIP (10%) et de normaux
         self.nb_vip = int(total * 0.1)
         self.nb_normal = total - self.nb_vip
         self.vip_created = 0
@@ -583,7 +545,6 @@ class Spawner:
         
         self.accu += self.rate * dt
         while self.accu >= 1.0 and self.created < self.total:
-            # Spawner les VIP d'abord, puis les passagers normaux
             if self.vip_created < self.nb_vip:
                 is_vip = True
                 self.vip_created += 1
@@ -622,8 +583,8 @@ class CheckinDesk:
         self.vip_queue = []
         self.capacity = capacity
         self.service_time = service_time
-        self.current_passengers = []  # Liste de passagers en cours
-        self.timers = []  # Timers pour chaque passager
+        self.current_passengers = [] 
+        self.timers = [] 
         self.event_bus = event_bus
     
     def enqueue(self, passenger):
@@ -646,7 +607,6 @@ class CheckinDesk:
         """
         served = []
         
-        # Faire monter les passagers en attente
         while self.has_space() and (self.vip_queue or self.normal_queue):
             if self.vip_queue:
                 p = self.vip_queue.pop(0)
@@ -655,7 +615,6 @@ class CheckinDesk:
             self.current_passengers.append(p)
             self.timers.append(0.0)
         
-        # Mettre à jour les timers
         for i in range(len(self.current_passengers) - 1, -1, -1):
             self.timers[i] += dt
             
@@ -691,17 +650,16 @@ class LoungeBlock:
         self.block_id = block_id
         self.position = position  # (x, y) sur la carte
         self.capacity = capacity
-        
-        # Slots : chaque slot contient le passager
+    
         self.slots = [None] * capacity
         
         # Offsets visuels pour chaque slot : 4 coins + centre
         self.slot_offsets = [
-            (-0.25, -0.25),  # coin haut gauche
-            (0.25, -0.25),   # coin haut droit
-            (-0.25, 0.25),   # coin bas gauche
-            (0.25, 0.25),    # coin bas droit
-            (0.0, 0.0)       # centre
+            (-0.25, -0.25),  
+            (0.25, -0.25),   
+            (-0.25, 0.25),   
+            (0.25, 0.25),   
+            (0.0, 0.0)       
         ]
     
     def has_free_slot(self):

@@ -1,7 +1,3 @@
-"""
-Système d'événements minimaliste pour découpler les composants.
-"""
-
 class EventBus:
     """Bus événementiel simple pour publier/souscrire à des événements."""
     
@@ -19,7 +15,6 @@ class EventBus:
         if event_type in self.subscribers:
             for callback in self.subscribers[event_type]:
                 callback(data)
-
 
 # Types d'événements
 class EventType:
