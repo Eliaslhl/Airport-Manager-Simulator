@@ -4,6 +4,7 @@ Affichage et rendu Pygame.
 
 import pygame
 import math
+from entities import PassengerState
 
 ZOOM = 28
 
@@ -31,6 +32,7 @@ COLOR_MAP = {
     'G': (80, 200, 255),    # Porte
     'A': (150, 150, 200),   # Avion
     'S': (100, 180, 130),   # Lounge
+    'V': (255, 215, 0),     # VIP Lounge (doré)
 }
 
 
@@ -178,8 +180,12 @@ def draw_map(screen, airport, passengers, score, remaining, nb_boarded, plane_st
                 screen.drawRect(x, y, color)
                 screen.drawRect(x, y, Color.black, 1)
     
-    # Passagers
+    # Passagers (ne pas afficher ceux qui sont TERMINE)
     for p in passengers:
+        # Ne pas dessiner si le passager a embarqué (état TERMINE)
+        if p.state == PassengerState.TERMINE:
+            continue
+        
         r = 0.35
         color = p.get_color()
         screen.drawCircle(p.x, p.y, r, color)

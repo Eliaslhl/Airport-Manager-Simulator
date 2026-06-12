@@ -27,8 +27,8 @@ M         X X X               M
 M                             M
 M   MMMMMMMMMMMMMMMMM         M
 M                             M
-M    S S S S S S S            M
-M    S S S S S S S            M
+M    V V       S S S S S      M
+M    V V       S S S S S      M
 M                             M
 M              G              M
 M              G              M

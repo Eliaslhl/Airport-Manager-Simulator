@@ -19,7 +19,8 @@ class AirportMap:
         self.secus = self._find('X')
         self.gates = self._find('G')
         self.planes = self._find('A')
-        self.lounges = self._find('S')  # Zones de lounge
+        self.lounges = self._find('S')  # Zones de lounge normales
+        self.vip_lounges = self._find('V')  # Zones de lounge VIP
         
         # Grouper les lounges par colonne X
         from collections import defaultdict
@@ -32,17 +33,33 @@ class AirportMap:
             lounge_columns[x] for x in sorted(lounge_columns.keys())
         ]
         
+        # Grouper les VIP lounges par colonne X
+        vip_lounge_columns = defaultdict(list)
+        for x, y in self.vip_lounges:
+            vip_lounge_columns[x].append((x, y))
+        
+        # Créer une liste des colonnes VIP lounge (triées par X)
+        self.vip_lounge_column_list = [
+            vip_lounge_columns[x] for x in sorted(vip_lounge_columns.keys())
+        ]
+        
         # Points cibles (centre de chaque zone)
         self.target_checkin = self.checkins[len(self.checkins) // 2]
         self.target_secu = self.secus[len(self.secus) // 2]
         # Pour le lounge : utiliser la PREMIERE colonne de lounge (gauche)
-        self.target_gate = self.lounge_column_list[0][0]  # Premier élément de la première colonne
+        self.target_gate = self.lounge_column_list[0][0] if self.lounge_column_list else self.gates[0]
+        # Pour le VIP lounge : utiliser la première colonne VIP lounge
+        self.target_vip_gate = self.vip_lounge_column_list[0][0] if self.vip_lounge_column_list else self.target_gate
+        # Pour l'embarquement : la vraie porte
+        self.target_embarkation = self.gates[0]
         
         # Cache des cartes de distance
         self._dist_cache = {}
         self.dist_checkin = self.get_dist(self.target_checkin)
         self.dist_secu = self.get_dist(self.target_secu)
         self.dist_gate = self.get_dist(self.target_gate)
+        self.dist_vip_gate = self.get_dist(self.target_vip_gate)
+        self.dist_embarkation = self.get_dist(self.target_embarkation)
         
         # Matrice de densité (nombre de passagers par cellule)
         self.densite = np.zeros((self.W, self.H), dtype=np.int32)

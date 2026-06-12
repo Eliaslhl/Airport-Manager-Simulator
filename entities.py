@@ -16,8 +16,9 @@ class PassengerState(IntEnum):
     ATTEND_SECURITE = 4
     VA_PORTE = 5
     ATTEND_EMBARQUEMENT = 6
-    EMBARQUE = 7
-    TERMINE = 8
+    VA_EMBARQUER = 7  # Se déplace vers la porte pour embarquer
+    EMBARQUEMENT = 8  # À la porte, attend validation (1s)
+    TERMINE = 9
 
 
 STATE_NAMES = {
@@ -28,7 +29,8 @@ STATE_NAMES = {
     PassengerState.ATTEND_SECURITE: "FILE SECU",
     PassengerState.VA_PORTE: "→ PORTE",
     PassengerState.ATTEND_EMBARQUEMENT: "LOUNGE",
-    PassengerState.EMBARQUE: "EMBARQUE",
+    PassengerState.VA_EMBARQUER: "→ EMBARQUER",
+    PassengerState.EMBARQUEMENT: "EMBARQUEMENT",
     PassengerState.TERMINE: "TERMINE",
 }
 
@@ -63,6 +65,10 @@ class Passenger:
         self.angry = False
         self.event_bus = event_bus
         self.current_lounge_block = None  # Bloc du lounge occupé
+        self.current_vip_lounge_block = None  # Bloc du VIP lounge occupé
+        self.assigned_checkin_zone = None  # Zone de check-in assignée
+        self.assigned_security_zone = None  # Zone de sécurité assignée
+        self.boarding_timer = 0.0  # Timer pour embarquement (1s)
     
     def get_color(self):
         """Retourne la couleur selon le type et l'état."""
@@ -90,18 +96,36 @@ class Passenger:
             return airport.dist_checkin
         elif self.state in (PassengerState.VA_SECURITE, PassengerState.ATTEND_SECURITE):
             return airport.dist_secu
-        elif self.state in (PassengerState.VA_PORTE, PassengerState.ATTEND_EMBARQUEMENT, PassengerState.EMBARQUE):
+        elif self.state in (PassengerState.VA_PORTE, PassengerState.ATTEND_EMBARQUEMENT):
+            # Aller au lounge d'attente
+            if self.is_vip:
+                return airport.dist_vip_gate
             return airport.dist_gate
+        elif self.state in (PassengerState.VA_EMBARQUER, PassengerState.EMBARQUEMENT):
+            # Aller à la vraie porte pour embarquer
+            return airport.dist_embarkation
         return None
     
     def get_target_pos(self, airport):
         """Retourne la position cible."""
         if self.state in (PassengerState.VA_ENREGISTREMENT, PassengerState.ATTEND_ENREGISTREMENT):
+            # Si assigné à une zone, utiliser sa position; sinon, le centre
+            if self.assigned_checkin_zone and self.assigned_checkin_zone.position:
+                return self.assigned_checkin_zone.position
             return airport.target_checkin
         elif self.state in (PassengerState.VA_SECURITE, PassengerState.ATTEND_SECURITE):
+            # Si assigné à une zone, utiliser sa position; sinon, le centre
+            if self.assigned_security_zone and self.assigned_security_zone.position:
+                return self.assigned_security_zone.position
             return airport.target_secu
-        elif self.state in (PassengerState.VA_PORTE, PassengerState.ATTEND_EMBARQUEMENT, PassengerState.EMBARQUE):
+        elif self.state in (PassengerState.VA_PORTE, PassengerState.ATTEND_EMBARQUEMENT):
+            # Aller au lounge d'attente
+            if self.is_vip:
+                return airport.target_vip_gate
             return airport.target_gate
+        elif self.state in (PassengerState.VA_EMBARQUER, PassengerState.EMBARQUEMENT):
+            # Aller à la vraie porte pour embarquer
+            return airport.target_embarkation
         return None
     
     def near_target(self, target, radius=1.5):
@@ -183,7 +207,7 @@ class Plane:
         remaining = max(0.0, self.depart_time - elapsed)
         
         # Transition vers embarquement
-        if remaining <= 30.0 and self.state == PlaneState.WAITING:
+        if remaining <= 60.0 and self.state == PlaneState.WAITING:
             self.state = PlaneState.BOARDING
             if self.event_bus:
                 self.event_bus.publish("plane_boarding_opened", None)
@@ -297,6 +321,89 @@ class QueueZone:
         return -1
 
 
+class ServiceZone:
+    """
+    Zone de service générique (check-in ou sécurité) avec 2 agents.
+    Chaque zone traite 2 passagers simultanément.
+    """
+    
+    def __init__(self, zone_id, name, position=None, capacity=2, service_time=3.0, event_bus=None):
+        """
+        Crée une zone de service.
+        
+        Args:
+            zone_id: identifiant unique
+            name: nom (ex "Check-in 1", "Sécurité 1")
+            position: tuple (x, y) de la position physique sur la carte
+            capacity: nombre de passagers en parallèle (2 agents)
+            service_time: temps pour servir un passager
+            event_bus: EventBus
+        """
+        self.zone_id = zone_id
+        self.name = name
+        self.position = position  # (x, y) sur la carte
+        self.normal_queue = []
+        self.vip_queue = []
+        self.capacity = capacity
+        self.service_time = service_time
+        self.current_passengers = []  # Liste de passagers en cours
+        self.timers = []  # Timers pour chaque passager
+        self.event_bus = event_bus
+    
+    def enqueue(self, passenger):
+        """Ajoute un passager à la file."""
+        if passenger.is_vip:
+            self.vip_queue.append(passenger)
+        else:
+            self.normal_queue.append(passenger)
+    
+    def has_space(self):
+        """Teste si la zone peut accepter un nouveau passager."""
+        return len(self.current_passengers) < self.capacity
+    
+    def can_accept(self):
+        """Teste si la zone peut accepter un passager (file + en cours)."""
+        return len(self.normal_queue) + len(self.vip_queue) + len(self.current_passengers) < 20
+    
+    def update(self, dt):
+        """
+        Met à jour la zone.
+        
+        Returns:
+            Liste des passagers qui viennent d'être servis
+        """
+        served = []
+        
+        # Faire monter les passagers en attente
+        while self.has_space() and (self.vip_queue or self.normal_queue):
+            if self.vip_queue:
+                p = self.vip_queue.pop(0)
+            else:
+                p = self.normal_queue.pop(0)
+            self.current_passengers.append(p)
+            self.timers.append(0.0)
+        
+        # Mettre à jour les timers
+        for i in range(len(self.current_passengers) - 1, -1, -1):
+            self.timers[i] += dt
+            
+            if self.timers[i] >= self.service_time:
+                served.append(self.current_passengers.pop(i))
+                self.timers.pop(i)
+                
+                if self.event_bus:
+                    self.event_bus.publish("passenger_served", {
+                        "passenger_id": served[-1].id,
+                        "zone": self.name
+                    })
+        
+        return served
+    
+    def size(self):
+        """Retourne le nombre de passagers en attente ou en cours."""
+        return len(self.normal_queue) + len(self.vip_queue) + len(self.current_passengers)
+
+
 class Spawner:
     """Crée des passagers au fil du temps."""
     
@@ -318,16 +425,27 @@ class Spawner:
         self.accu = 0.0
         self.rate = rate
         self.event_bus = event_bus
+        # Calculer le nombre de VIP (10%) et de normaux
+        self.nb_vip = int(total * 0.1)
+        self.nb_normal = total - self.nb_vip
+        self.vip_created = 0
+        self.normal_created = 0
     
     def update(self, dt):
-        """Crée des passagers selon le timing."""
+        """Crée des passagers selon le timing - VIP d'abord, puis normaux."""
         if self.created >= self.total:
             return
         
         self.accu += self.rate * dt
         while self.accu >= 1.0 and self.created < self.total:
-            # 10% de VIP
-            is_vip = random.random() < 0.1
+            # Spawner les VIP d'abord, puis les passagers normaux
+            if self.vip_created < self.nb_vip:
+                is_vip = True
+                self.vip_created += 1
+            else:
+                is_vip = False
+                self.normal_created += 1
+            
             p = Passenger(self.spawn, is_vip=is_vip, event_bus=self.event_bus)
             self.passengers.append(p)
             
