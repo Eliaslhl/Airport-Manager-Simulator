@@ -83,6 +83,14 @@ class Passenger:
             self.state = new_state
             self.wait_timer = 0.0
             
+            # Si on passe à un état d'attente/fixe, fixer le passager au centre de sa cellule
+            # Pour éviter l'oscillation et le mouvement de microtremblement
+            if new_state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE, 
+                            PassengerState.ATTEND_EMBARQUEMENT, PassengerState.EMBARQUEMENT):
+                self.x = int(self.x) + 0.5
+                self.y = int(self.y) + 0.5
+                self.dir = (0.0, 0.0)  # Aucune direction de déplacement
+            
             if self.event_bus:
                 self.event_bus.publish("passenger_state_changed", {
                     "passenger_id": self.id,
@@ -92,40 +100,44 @@ class Passenger:
     
     def get_target_dist(self, airport):
         """Retourne la carte de distance vers l'objectif actuel."""
-        if self.state in (PassengerState.VA_ENREGISTREMENT, PassengerState.ATTEND_ENREGISTREMENT):
+        # Seuls les états de DÉPLACEMENT ont une cible active
+        if self.state == PassengerState.VA_ENREGISTREMENT:
             return airport.dist_checkin
-        elif self.state in (PassengerState.VA_SECURITE, PassengerState.ATTEND_SECURITE):
+        elif self.state == PassengerState.VA_SECURITE:
             return airport.dist_secu
-        elif self.state in (PassengerState.VA_PORTE, PassengerState.ATTEND_EMBARQUEMENT):
+        elif self.state == PassengerState.VA_PORTE:
             # Aller au lounge d'attente
             if self.is_vip:
                 return airport.dist_vip_gate
             return airport.dist_gate
-        elif self.state in (PassengerState.VA_EMBARQUER, PassengerState.EMBARQUEMENT):
+        elif self.state == PassengerState.VA_EMBARQUER:
             # Aller à la vraie porte pour embarquer
             return airport.dist_embarkation
+        # Les états ATTEND_* et EMBARQUEMENT n'ont pas de cible active
         return None
     
     def get_target_pos(self, airport):
         """Retourne la position cible."""
-        if self.state in (PassengerState.VA_ENREGISTREMENT, PassengerState.ATTEND_ENREGISTREMENT):
+        # Seuls les états de DÉPLACEMENT ont une cible active
+        if self.state == PassengerState.VA_ENREGISTREMENT:
             # Si assigné à une zone, utiliser sa position; sinon, le centre
             if self.assigned_checkin_zone and self.assigned_checkin_zone.position:
                 return self.assigned_checkin_zone.position
             return airport.target_checkin
-        elif self.state in (PassengerState.VA_SECURITE, PassengerState.ATTEND_SECURITE):
+        elif self.state == PassengerState.VA_SECURITE:
             # Si assigné à une zone, utiliser sa position; sinon, le centre
             if self.assigned_security_zone and self.assigned_security_zone.position:
                 return self.assigned_security_zone.position
             return airport.target_secu
-        elif self.state in (PassengerState.VA_PORTE, PassengerState.ATTEND_EMBARQUEMENT):
+        elif self.state == PassengerState.VA_PORTE:
             # Aller au lounge d'attente
             if self.is_vip:
                 return airport.target_vip_gate
             return airport.target_gate
-        elif self.state in (PassengerState.VA_EMBARQUER, PassengerState.EMBARQUEMENT):
+        elif self.state == PassengerState.VA_EMBARQUER:
             # Aller à la vraie porte pour embarquer
             return airport.target_embarkation
+        # Les états ATTEND_* et EMBARQUEMENT n'ont pas de cible active
         return None
     
     def near_target(self, target, radius=1.5):
@@ -135,16 +147,21 @@ class Passenger:
     
     def move(self, dt, airport):
         """Déplace le passager vers sa cible."""
-        # Les passagers en attente ne bougent pas
-        if self.state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE, PassengerState.ATTEND_EMBARQUEMENT):
+        # Les passagers en attente ou en embarquement ne bougent pas
+        # États fixes: ATTEND_ENREGISTREMENT, ATTEND_SECURITE, ATTEND_EMBARQUEMENT, EMBARQUEMENT, TERMINE
+        if self.state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE, 
+                         PassengerState.ATTEND_EMBARQUEMENT, PassengerState.EMBARQUEMENT, PassengerState.TERMINE):
+            self.dir = (0.0, 0.0)  # Aucune direction quand on est fixe
             return
         
         dist_map = self.get_target_dist(airport)
         if dist_map is None:
+            self.dir = (0.0, 0.0)
             return
         
         next_move = airport.get_next_move(self.x, self.y, dist_map, avoid_overcrowding=True)
         if next_move is None:
+            self.dir = (0.0, 0.0)
             return
         
         nx, ny = next_move

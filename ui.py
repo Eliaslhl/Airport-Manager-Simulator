@@ -190,17 +190,22 @@ def draw_map(screen, airport, passengers, score, remaining, nb_boarded, plane_st
         color = p.get_color()
         screen.drawCircle(p.x, p.y, r, color)
         
-        # Flèche direction
-        dx, dy = p.dir
-        norm = math.hypot(dx, dy)
-        if norm > 0.01:
-            dx /= norm
-            dy /= norm
-            A = (p.x + dx * 0.4, p.y + dy * 0.4)
-            lx, ly = -dy * 0.15, dx * 0.15
-            B = (p.x + lx, p.y + ly)
-            C = (p.x - lx, p.y - ly)
-            screen.drawTriangle(A, B, C, Color.white)
+        # Flèche direction - seulement pour les états de déplacement
+        # Pas de flèche pour: ATTEND_ENREGISTREMENT, ATTEND_SECURITE, ATTEND_EMBARQUEMENT, EMBARQUEMENT, TERMINE
+        moving_states = (PassengerState.ARRIVE, PassengerState.VA_ENREGISTREMENT, 
+                        PassengerState.VA_SECURITE, PassengerState.VA_PORTE, PassengerState.VA_EMBARQUER)
+        
+        if p.state in moving_states:
+            dx, dy = p.dir
+            norm = math.hypot(dx, dy)
+            if norm > 0.01:
+                dx /= norm
+                dy /= norm
+                A = (p.x + dx * 0.4, p.y + dy * 0.4)
+                lx, ly = -dy * 0.15, dx * 0.15
+                B = (p.x + lx, p.y + ly)
+                C = (p.x - lx, p.y - ly)
+                screen.drawTriangle(A, B, C, Color.white)
     
     screen.drawHUD(score, remaining, len(passengers), nb_boarded, plane_state)
     screen.show()

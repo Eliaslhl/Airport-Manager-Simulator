@@ -111,12 +111,25 @@ class AirportMap:
             (nx, ny) ou None
         """
         ix, iy = int(x), int(y)
+        
+        # Vérifier que la cellule actuelle est valide
+        if not self.walkable(ix, iy):
+            return None
+        
+        current_dist = target_dist[ix, iy]
         neighbors = [(ix+1, iy), (ix-1, iy), (ix, iy+1), (ix, iy-1)]
         
-        # Filtre les cellules marchables
+        # Filtre les cellules marchables ET qui se rapprochent (ou du moins qui ne s'éloignent pas)
         valid = []
         for nx, ny in neighbors:
             if not self.walkable(nx, ny):
+                continue
+            
+            next_dist = target_dist[nx, ny]
+            
+            # Accepter les cellules qui se rapprochent strictement OU qui sont à la même distance
+            # (pour éviter les blocages sur les plateaux)
+            if next_dist > current_dist:
                 continue
             
             # Évite les zones surpeuplées
