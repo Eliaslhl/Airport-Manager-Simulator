@@ -164,6 +164,32 @@ class Passenger:
         tx, ty = target
         return abs(self.x - tx) <= radius and abs(self.y - ty) <= radius
     
+    def reached_assigned_target(self, radius=0.6):
+        """
+        Teste si le passager a atteint sa destination assignée.
+        
+        Retourne True si:
+        - Le passager est proche de assigned_target_pos (position exacte du slot), OU
+        - Le passager est dans la même cellule que assigned_target_cell
+        
+        Cela gère le cas où le pathfinding amène le passager dans la bonne case
+        mais pas exactement sur l'offset du slot.
+        """
+        if self.assigned_target_pos is None:
+            return False
+        
+        # Essai 1: Position exacte (avec tolérance)
+        if self.near_target(self.assigned_target_pos, radius):
+            return True
+        
+        # Essai 2: Même cellule (plus tolérant)
+        if self.assigned_target_cell is not None:
+            tx, ty = self.assigned_target_cell
+            if int(self.x) == tx and int(self.y) == ty:
+                return True
+        
+        return False
+    
     def move(self, dt, airport):
         """Déplace le passager vers sa cible."""
         # Les passagers en attente ou en embarquement ne bougent pas

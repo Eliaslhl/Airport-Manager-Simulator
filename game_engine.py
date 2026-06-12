@@ -362,7 +362,7 @@ class GameEngine:
         
         elif p.state == PassengerState.VA_ENREGISTREMENT:
             # Se déplacer vers le check-in assigné
-            if p.assigned_target_pos and p.near_target(p.assigned_target_pos, 0.6):
+            if p.reached_assigned_target(radius=0.6):
                 # Arrivé au check-in
                 # Fixer exactement sur la position du slot
                 p.x, p.y = p.assigned_target_pos
@@ -377,7 +377,7 @@ class GameEngine:
         
         elif p.state == PassengerState.VA_SECURITE:
             # Se déplacer vers la sécurité assignée
-            if p.assigned_target_pos and p.near_target(p.assigned_target_pos, 0.6):
+            if p.reached_assigned_target(radius=0.6):
                 # Arrivé à la sécurité
                 p.x, p.y = p.assigned_target_pos
                 # Démarrer le service (timer commence maintenant)
@@ -391,7 +391,7 @@ class GameEngine:
         
         elif p.state == PassengerState.VA_PORTE:
             # Se déplacer vers le lounge assigné
-            if p.near_target(p.assigned_target_pos, 0.6):
+            if p.reached_assigned_target(radius=0.6):
                 # Arrivé au lounge
                 p.x, p.y = p.assigned_target_pos
                 p.set_state(PassengerState.ATTEND_EMBARQUEMENT)
@@ -400,14 +400,13 @@ class GameEngine:
             # Passager au lounge : attendant l'embarquement
             # Le lounge a déjà été assigné lors de la transition ATTEND_SECURITE → VA_PORTE
             
-            # Assurer que le passager est enregistré dans son bloc lounge
+            # Ne pas appeler add_passenger() - le slot est déjà réservé!
+            # Juste mettre à jour les références current_*_lounge_block
             if p.is_vip:
                 if p.current_vip_lounge_block is None and p.assigned_lounge_block:
-                    p.assigned_lounge_block.add_passenger(p)
                     p.current_vip_lounge_block = p.assigned_lounge_block
             else:
                 if p.current_lounge_block is None and p.assigned_lounge_block:
-                    p.assigned_lounge_block.add_passenger(p)
                     p.current_lounge_block = p.assigned_lounge_block
             
             # L'embarquement est géré par _handle_boarding_priority() appelée dans update()
