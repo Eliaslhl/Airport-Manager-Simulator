@@ -33,6 +33,8 @@ COLOR_MAP = {
     'A': (150, 150, 200),   # Avion
     'S': (100, 180, 130),   # Lounge
     'V': (255, 215, 0),     # VIP Lounge (doré)
+    'B': (190, 120, 70),    # Boutique / commerce
+    'K': (160, 90, 60),     # Café (optionnel)
 }
 
 
@@ -195,8 +197,16 @@ def draw_map(screen, airport, passengers, score, remaining, nb_boarded, plane_st
         
         # Flèche direction - seulement pour les états de déplacement
         # Pas de flèche pour: ATTEND_ENREGISTREMENT, ATTEND_SECURITE, ATTEND_EMBARQUEMENT, EMBARQUEMENT, TERMINE
-        moving_states = (PassengerState.ARRIVE, PassengerState.VA_ENREGISTREMENT, 
-                        PassengerState.VA_SECURITE, PassengerState.VA_PORTE, PassengerState.VA_EMBARQUER)
+        moving_states = (
+            PassengerState.ARRIVE,
+            PassengerState.VA_ENREGISTREMENT,
+            PassengerState.VA_SECURITE,
+            PassengerState.VA_PORTE,
+            PassengerState.VA_COMMERCE,
+            PassengerState.RETOUR_CHECKIN,
+            PassengerState.RETOUR_SECURITE,
+            PassengerState.VA_EMBARQUER,
+        )
         
         if p.state in moving_states:
             dx, dy = p.dir

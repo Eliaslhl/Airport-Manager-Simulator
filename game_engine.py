@@ -18,6 +18,15 @@ from events import EventBus, EventType
 from map_manager import AirportMap
 
 
+# Extension IA dynamique : seuils simples et configurables
+CHECKIN_SATURATION_THRESHOLD = 4
+SECURITY_SATURATION_THRESHOLD = 4
+MIN_TIME_BEFORE_FLIGHT_FOR_SHOPPING = 30.0
+MAX_COMMERCE_WAIT_TIME = 8.0
+COMMERCE_RETURN_CHECKIN = "CHECKIN"
+COMMERCE_RETURN_SECURITY = "SECURITY"
+
+
 class GameEngine:
     """Moteur de jeu principal."""
     
@@ -44,6 +53,8 @@ class GameEngine:
         self.vip_lounge_blocks: list = []  # Blocs de VIP lounge
         self.lounge_assignment_counter: int = 0  # Compteur pour distribuer aux blocs
         self.vip_lounge_assignment_counter: int = 0  # Compteur pour distribuer aux blocs VIP
+        self.commerce_assignment_counter: int = 0  # Répartition simple dans les cases commerce
+        self.current_remaining: float = 0.0
         
         # Boarding system (embarquement 2 par 2)
         self.boarding_group_timer: float = 0.0  # Timer entre groupes (2s)
@@ -97,6 +108,10 @@ class GameEngine:
             for i, pos in enumerate(self.airport.vip_lounges_ordered)
         ]
         
+        self.lounge_assignment_counter = 0
+        self.vip_lounge_assignment_counter = 0
+        self.commerce_assignment_counter = 0
+        self.current_remaining = plane_depart_time
         self.score = 0
         self.nb_boarded = 0
         self.missed_passengers = 0
@@ -126,6 +141,149 @@ class GameEngine:
             if block.has_free_slot():
                 return block
         return None
+
+    def _service_load(self, zones):
+        """Nombre de passagers réservés/en service dans un ensemble de zones."""
+        return sum(zone.size() for zone in zones)
+
+    def _has_free_service_slot(self, zones):
+        """Indique s'il reste au moins un slot réservable."""
+        return any(zone.has_free_slot() for zone in zones)
+
+    def is_checkin_saturated(self):
+        """Saturation du check-in : trop de passagers ou aucun slot libre."""
+        return (
+            self._service_load(self.checkin_zones) >= CHECKIN_SATURATION_THRESHOLD
+            or not self._has_free_service_slot(self.checkin_zones)
+        )
+
+    def is_security_saturated(self):
+        """Saturation de la sécurité : trop de passagers ou aucun slot libre."""
+        return (
+            self._service_load(self.security_zones) >= SECURITY_SATURATION_THRESHOLD
+            or not self._has_free_service_slot(self.security_zones)
+        )
+
+    def is_flight_urgent(self):
+        """Retourne True quand il reste trop peu de temps pour faire un détour."""
+        return self.current_remaining <= MIN_TIME_BEFORE_FLIGHT_FOR_SHOPPING
+
+    def _should_detour_to_commerce(self, passenger, return_target):
+        """Décide si un passager peut faire un détour vers le commerce."""
+        if not self.airport.commerces_ordered:
+            return False
+        if self.is_flight_urgent():
+            return False
+
+        if return_target == COMMERCE_RETURN_CHECKIN:
+            if passenger.used_commerce_for_checkin:
+                return False
+            return self.is_checkin_saturated()
+
+        if return_target == COMMERCE_RETURN_SECURITY:
+            if passenger.used_commerce_for_security:
+                return False
+            return self.is_security_saturated()
+
+        return False
+
+    def _assign_to_commerce(self, passenger, return_target):
+        """Assigne une case commerce comme détour temporaire."""
+        if not self.airport.commerces_ordered:
+            return False
+
+        cells = self.airport.commerces_ordered
+        cell = cells[self.commerce_assignment_counter % len(cells)]
+        offsets = [
+            (-0.25, -0.25),
+            (0.25, -0.25),
+            (-0.25, 0.25),
+            (0.25, 0.25),
+            (0.0, 0.0),
+        ]
+        offset = offsets[self.commerce_assignment_counter % len(offsets)]
+        self.commerce_assignment_counter += 1
+
+        passenger.return_after_commerce = return_target
+        passenger.commerce_timer = 0.0
+        passenger.assigned_target_cell = cell
+        passenger.assigned_target_pos = (cell[0] + 0.5 + offset[0], cell[1] + 0.5 + offset[1])
+
+        if return_target == COMMERCE_RETURN_CHECKIN:
+            passenger.used_commerce_for_checkin = True
+        elif return_target == COMMERCE_RETURN_SECURITY:
+            passenger.used_commerce_for_security = True
+
+        passenger.set_state(PassengerState.VA_COMMERCE)
+        return True
+
+    def _commerce_can_leave(self, passenger):
+        """Indique si un passager doit/quitte la zone commerce."""
+        if passenger.return_after_commerce is None:
+            return True
+        if self.is_flight_urgent():
+            return True
+        if passenger.commerce_timer >= MAX_COMMERCE_WAIT_TIME:
+            return True
+        if passenger.return_after_commerce == COMMERCE_RETURN_CHECKIN:
+            return not self.is_checkin_saturated()
+        if passenger.return_after_commerce == COMMERCE_RETURN_SECURITY:
+            return not self.is_security_saturated()
+        return True
+
+    def _assign_checkin_destination(self, passenger, new_state=PassengerState.VA_ENREGISTREMENT):
+        """Réserve un slot check-in et définit la cible du passager."""
+        checkin_zone = self.find_free_service_zone(self.checkin_zones)
+        if not checkin_zone:
+            return False
+
+        slot_idx = checkin_zone.reserve_slot(passenger)
+        if slot_idx is None:
+            return False
+
+        passenger.assigned_checkin_zone = checkin_zone
+        passenger.assigned_checkin_slot = slot_idx
+        passenger.assigned_target_cell = checkin_zone.position
+        passenger.assigned_target_pos = checkin_zone.get_slot_position(slot_idx)
+        passenger.return_after_commerce = None
+        passenger.set_state(new_state)
+        return True
+
+    def _assign_security_destination(self, passenger, new_state=PassengerState.VA_SECURITE):
+        """Réserve un slot sécurité et définit la cible du passager."""
+        security_zone = self.find_free_service_zone(self.security_zones)
+        if not security_zone:
+            return False
+
+        slot_idx = security_zone.reserve_slot(passenger)
+        if slot_idx is None:
+            return False
+
+        passenger.assigned_security_zone = security_zone
+        passenger.assigned_security_slot = slot_idx
+        passenger.assigned_target_cell = security_zone.position
+        passenger.assigned_target_pos = security_zone.get_slot_position(slot_idx)
+        passenger.return_after_commerce = None
+        passenger.set_state(new_state)
+        return True
+
+    def _assign_lounge_destination(self, passenger):
+        """Réserve une place dans le lounge normal ou VIP."""
+        lounge_blocks = self.vip_lounge_blocks if passenger.is_vip else self.lounge_blocks
+        lounge_zone = self.find_free_lounge_block(lounge_blocks)
+        if not lounge_zone:
+            return False
+
+        slot_idx = lounge_zone.reserve_slot(passenger)
+        if slot_idx is None:
+            return False
+
+        passenger.assigned_lounge_block = lounge_zone
+        passenger.assigned_lounge_slot = slot_idx
+        passenger.assigned_target_cell = lounge_zone.position
+        passenger.assigned_target_pos = lounge_zone.get_slot_position(slot_idx)
+        passenger.set_state(PassengerState.VA_PORTE)
+        return True
     
     def has_vip_not_finished(self):
         """
@@ -241,6 +399,7 @@ class GameEngine:
         
         # Mise à jour avion
         remaining = self.plane.update(elapsed_time)
+        self.current_remaining = remaining
         
         # Spawn passagers
         self.spawner.update(dt)
@@ -252,24 +411,18 @@ class GameEngine:
             all_served_checkin.extend(served)
         
         for p in all_served_checkin:
-            # Libérer le slot check-in
-            if p.assigned_checkin_zone:
-                p.assigned_checkin_zone.release_slot(p)
-            
-            # Réinitialiser les assignations check-in
+            # Service check-in terminé : le slot a déjà été libéré par ServiceZone.update().
             p.assigned_checkin_zone = None
             p.assigned_checkin_slot = None
-            
-            # Assigner une sécurité
-            security_zone = self.find_free_service_zone(self.security_zones)
-            if security_zone:
-                slot_idx = security_zone.reserve_slot(p)
-                if slot_idx is not None:
-                    p.assigned_security_zone = security_zone
-                    p.assigned_security_slot = slot_idx
-                    p.assigned_target_cell = security_zone.position
-                    p.assigned_target_pos = security_zone.get_slot_position(slot_idx)
-                    p.set_state(PassengerState.VA_SECURITE)
+
+            # Si la sécurité est saturée et que le temps le permet, détour commerce.
+            if self._should_detour_to_commerce(p, COMMERCE_RETURN_SECURITY):
+                if self._assign_to_commerce(p, COMMERCE_RETURN_SECURITY):
+                    continue
+
+            # Sinon, direction sécurité. Si aucun slot n'est libre, utiliser le commerce comme zone d'attente.
+            if not self._assign_security_destination(p):
+                self._assign_to_commerce(p, COMMERCE_RETURN_SECURITY)
         
         # Mise à jour zones de sécurité
         all_served_secu = []
@@ -278,25 +431,12 @@ class GameEngine:
             all_served_secu.extend(served)
         
         for p in all_served_secu:
-            # Libérer le slot sécurité
-            if p.assigned_security_zone:
-                p.assigned_security_zone.release_slot(p)
-            
-            # Réinitialiser les assignations sécurité
+            # Service sécurité terminé : le slot a déjà été libéré par ServiceZone.update().
             p.assigned_security_zone = None
             p.assigned_security_slot = None
-            
-            # Assigner un lounge
-            lounge_blocks = self.vip_lounge_blocks if p.is_vip else self.lounge_blocks
-            lounge_zone = self.find_free_lounge_block(lounge_blocks)
-            if lounge_zone:
-                slot_idx = lounge_zone.reserve_slot(p)
-                if slot_idx is not None:
-                    p.assigned_lounge_block = lounge_zone
-                    p.assigned_lounge_slot = slot_idx
-                    p.assigned_target_cell = lounge_zone.position
-                    p.assigned_target_pos = lounge_zone.get_slot_position(slot_idx)
-                    p.set_state(PassengerState.VA_PORTE)
+
+            # Le lounge est assigné uniquement APRÈS la sécurité.
+            self._assign_lounge_destination(p)
         
         # Passagers à retirer
         to_remove = []
@@ -380,78 +520,83 @@ class GameEngine:
             return
         
         if p.state == PassengerState.ARRIVE:
-            # Assigner un check-in AVANT de commencer à se déplacer
-            checkin_zone = self.find_free_service_zone(self.checkin_zones)
-            if checkin_zone:
-                slot_idx = checkin_zone.reserve_slot(p)
-                if slot_idx is not None:
-                    p.assigned_checkin_zone = checkin_zone
-                    p.assigned_checkin_slot = slot_idx
-                    p.assigned_target_cell = checkin_zone.position
-                    p.assigned_target_pos = checkin_zone.get_slot_position(slot_idx)
-                    p.set_state(PassengerState.VA_ENREGISTREMENT)
-        
-        elif p.state == PassengerState.VA_ENREGISTREMENT:
+            # Avant de partir au check-in, le passager peut faire un détour commerce
+            # si les guichets sont saturés et si le vol n'est pas urgent.
+            if self._should_detour_to_commerce(p, COMMERCE_RETURN_CHECKIN):
+                self._assign_to_commerce(p, COMMERCE_RETURN_CHECKIN)
+            else:
+                self._assign_checkin_destination(p, PassengerState.VA_ENREGISTREMENT)
+
+        elif p.state in (PassengerState.VA_ENREGISTREMENT, PassengerState.RETOUR_CHECKIN):
             # Se déplacer vers le check-in assigné
             if p.reached_assigned_target(radius=0.6):
-                # Arrivé au check-in
-                # Fixer exactement sur la position du slot
                 p.x, p.y = p.assigned_target_pos
-                # Démarrer le service (timer commence maintenant)
                 if p.assigned_checkin_zone:
                     p.assigned_checkin_zone.start_service(p)
                 p.set_state(PassengerState.ATTEND_ENREGISTREMENT)
-        
+
         elif p.state == PassengerState.ATTEND_ENREGISTREMENT:
-            # Reste en file (pas de mouvement - géré par ServiceZone.update())
-            pass
-        
-        elif p.state == PassengerState.VA_SECURITE:
+            # Si le service est déjà terminé mais qu'aucune sécurité n'a pu être assignée,
+            # retenter proprement. Sinon, ServiceZone.update() déclenchera la suite.
+            if p.assigned_checkin_zone is None and p.assigned_security_zone is None:
+                if self._should_detour_to_commerce(p, COMMERCE_RETURN_SECURITY):
+                    self._assign_to_commerce(p, COMMERCE_RETURN_SECURITY)
+                else:
+                    self._assign_security_destination(p, PassengerState.VA_SECURITE)
+
+        elif p.state in (PassengerState.VA_SECURITE, PassengerState.RETOUR_SECURITE):
             # Se déplacer vers la sécurité assignée
             if p.reached_assigned_target(radius=0.6):
-                # Arrivé à la sécurité
                 p.x, p.y = p.assigned_target_pos
-                # Démarrer le service (timer commence maintenant)
                 if p.assigned_security_zone:
                     p.assigned_security_zone.start_service(p)
                 p.set_state(PassengerState.ATTEND_SECURITE)
-        
+
         elif p.state == PassengerState.ATTEND_SECURITE:
-            # Reste en file (pas de mouvement - géré par ServiceZone.update())
+            # Reste en file/service sécurité. La transition vers le lounge est déclenchée
+            # par ServiceZone.update() quand le service est terminé.
             pass
-        
+
+        elif p.state == PassengerState.VA_COMMERCE:
+            # Le pathfinding arrive dans la case commerce ; on snappe ensuite sur le slot visuel.
+            if p.reached_assigned_target(radius=0.6):
+                p.x, p.y = p.assigned_target_pos
+                p.commerce_timer = 0.0
+                p.set_state(PassengerState.ATTEND_COMMERCE)
+
+        elif p.state == PassengerState.ATTEND_COMMERCE:
+            # Attente intelligente : le passager repart si la file visée se vide,
+            # si le temps presse ou si l'attente maximale est dépassée.
+            p.commerce_timer += dt
+            if self._commerce_can_leave(p):
+                if p.return_after_commerce == COMMERCE_RETURN_CHECKIN:
+                    self._assign_checkin_destination(p, PassengerState.RETOUR_CHECKIN)
+                elif p.return_after_commerce == COMMERCE_RETURN_SECURITY:
+                    self._assign_security_destination(p, PassengerState.RETOUR_SECURITE)
+
         elif p.state == PassengerState.VA_PORTE:
             # Se déplacer vers le lounge assigné
             if p.reached_assigned_target(radius=0.6):
-                # Arrivé au lounge
                 p.x, p.y = p.assigned_target_pos
                 p.set_state(PassengerState.ATTEND_EMBARQUEMENT)
-        
+
         elif p.state == PassengerState.ATTEND_EMBARQUEMENT:
-            # Passager au lounge : attendant l'embarquement
-            # Le lounge a déjà été assigné lors de la transition ATTEND_SECURITE → VA_PORTE
-            
-            # Ne pas appeler add_passenger() - le slot est déjà réservé!
-            # Juste mettre à jour les références current_*_lounge_block
+            # Passager au lounge : le slot est déjà réservé.
+            # Ne pas appeler add_passenger() une deuxième fois.
             if p.is_vip:
                 if p.current_vip_lounge_block is None and p.assigned_lounge_block:
                     p.current_vip_lounge_block = p.assigned_lounge_block
             else:
                 if p.current_lounge_block is None and p.assigned_lounge_block:
                     p.current_lounge_block = p.assigned_lounge_block
-            
-            # L'embarquement est géré par _handle_boarding_priority() appelée dans update()
-            pass
-        
+
         elif p.state == PassengerState.VA_EMBARQUER:
-            # Aller vers la porte (utiliser la cible assignée)
-            # Utiliser reached_assigned_target() pour être plus tolérant
-            # Si le passager est dans la bonne cellule, le faire embarquer
+            # Aller vers la porte d'embarquement.
             if p.reached_assigned_target(radius=0.8):
                 p.x, p.y = p.assigned_target_pos
                 p.set_state(PassengerState.EMBARQUEMENT)
                 p.boarding_timer = 0.0
-        
+
         elif p.state == PassengerState.EMBARQUEMENT:
             # À la porte, attendre 1 seconde avant de disparaître
             p.boarding_timer += dt

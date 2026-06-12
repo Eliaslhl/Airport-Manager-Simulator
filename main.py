@@ -16,7 +16,7 @@ M                             M
 M  W                          M
 M                             M
 M  MMMMMMMMM   MMMMMMMM       M
-M                             M
+M                     B B     M
 M  MMMMMMMMM   MMMMMMMM       M
 M                             M
 M   C C C C                   M
@@ -24,7 +24,7 @@ M                             M
 M   MMMMMMMMMMMMM             M
 M                             M
 M         X X X               M
-M                             M
+M        B B                  M
 M   MMMMMMMMMMMMMMMMM         M
 M                             M
 M    V V       S S S S S      M

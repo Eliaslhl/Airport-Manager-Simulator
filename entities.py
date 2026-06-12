@@ -8,7 +8,7 @@ from enum import IntEnum
 
 
 class PassengerState(IntEnum):
-    """États d'une passager (machine à états)."""
+    """États d'un passager (machine à états)."""
     ARRIVE = 0
     VA_ENREGISTREMENT = 1
     ATTEND_ENREGISTREMENT = 2
@@ -16,9 +16,13 @@ class PassengerState(IntEnum):
     ATTEND_SECURITE = 4
     VA_PORTE = 5
     ATTEND_EMBARQUEMENT = 6
-    VA_EMBARQUER = 7  # Se déplace vers la porte pour embarquer
-    EMBARQUEMENT = 8  # À la porte, attend validation (1s)
-    TERMINE = 9
+    VA_COMMERCE = 7       # Détour dynamique vers la boutique/café
+    ATTEND_COMMERCE = 8   # Attente intelligente dans la zone commerciale
+    RETOUR_CHECKIN = 9    # Retour du commerce vers le check-in
+    RETOUR_SECURITE = 10  # Retour du commerce vers la sécurité
+    VA_EMBARQUER = 11     # Se déplace vers la porte pour embarquer
+    EMBARQUEMENT = 12     # À la porte, attend validation (1s)
+    TERMINE = 13
 
 
 STATE_NAMES = {
@@ -29,6 +33,10 @@ STATE_NAMES = {
     PassengerState.ATTEND_SECURITE: "FILE SECU",
     PassengerState.VA_PORTE: "→ PORTE",
     PassengerState.ATTEND_EMBARQUEMENT: "LOUNGE",
+    PassengerState.VA_COMMERCE: "→ COMMERCE",
+    PassengerState.ATTEND_COMMERCE: "COMMERCE",
+    PassengerState.RETOUR_CHECKIN: "↩ ENREG.",
+    PassengerState.RETOUR_SECURITE: "↩ SECU",
     PassengerState.VA_EMBARQUER: "→ EMBARQUER",
     PassengerState.EMBARQUEMENT: "EMBARQUEMENT",
     PassengerState.TERMINE: "TERMINE",
@@ -75,6 +83,12 @@ class Passenger:
         self.assigned_target_cell = None  # Position cible (x, y) entière
         self.assigned_target_pos = None  # Position cible précise (x.xx, y.yy)
         self.boarding_timer = 0.0  # Timer pour embarquement (1s)
+
+        # Extension IA dynamique : détour temporaire vers la zone commerciale
+        self.return_after_commerce = None  # "CHECKIN" ou "SECURITY"
+        self.commerce_timer = 0.0
+        self.used_commerce_for_checkin = False
+        self.used_commerce_for_security = False
     
     def get_color(self):
         """Retourne la couleur selon le type et l'état."""
@@ -91,8 +105,9 @@ class Passenger:
             
             # Si on passe à un état d'attente/fixe, fixer le passager
             # Pour éviter l'oscillation et le mouvement de microtremblement
-            if new_state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE, 
-                            PassengerState.ATTEND_EMBARQUEMENT, PassengerState.EMBARQUEMENT):
+            if new_state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE,
+                            PassengerState.ATTEND_EMBARQUEMENT, PassengerState.ATTEND_COMMERCE,
+                            PassengerState.EMBARQUEMENT):
                 # Si une position assignée est disponible, l'utiliser
                 if self.assigned_target_pos is not None:
                     self.x, self.y = self.assigned_target_pos
@@ -111,54 +126,39 @@ class Passenger:
     
     def get_target_dist(self, airport):
         """Retourne la carte de distance vers l'objectif actuel."""
-        # Seuls les états de DÉPLACEMENT ont une cible active
-        if self.state == PassengerState.VA_ENREGISTREMENT:
-            if self.assigned_target_cell:
+        # Les destinations assignées par passager sont prioritaires.
+        # Cela permet d'aller vers un C/X/S/B précis au lieu d'une cible globale.
+        if self.state in (
+            PassengerState.VA_ENREGISTREMENT,
+            PassengerState.VA_SECURITE,
+            PassengerState.VA_PORTE,
+            PassengerState.VA_COMMERCE,
+            PassengerState.RETOUR_CHECKIN,
+            PassengerState.RETOUR_SECURITE,
+        ):
+            if self.assigned_target_cell is not None:
                 return airport.get_dist(self.assigned_target_cell)
-            return airport.dist_checkin
-        elif self.state == PassengerState.VA_SECURITE:
-            if self.assigned_target_cell:
-                return airport.get_dist(self.assigned_target_cell)
-            return airport.dist_secu
-        elif self.state == PassengerState.VA_PORTE:
-            if self.assigned_target_cell:
-                return airport.get_dist(self.assigned_target_cell)
-            if self.is_vip:
-                return airport.dist_vip_gate
-            return airport.dist_gate
-        elif self.state == PassengerState.VA_EMBARQUER:
+            return None
+
+        if self.state == PassengerState.VA_EMBARQUER:
             # Aller à la vraie porte pour embarquer
             return airport.dist_embarkation
+
         # Les états ATTEND_* et EMBARQUEMENT n'ont pas de cible active
         return None
-    
+
     def get_target_pos(self, airport):
         """Retourne la position cible."""
-        # Si une position assignée est disponible, l'utiliser en priorité
+        # Si une position assignée est disponible, l'utiliser en priorité.
+        # Les états de retour depuis le commerce utilisent aussi assigned_target_pos.
         if self.assigned_target_pos is not None:
             return self.assigned_target_pos
-        
-        # Seuls les états de DÉPLACEMENT ont une cible active
-        if self.state == PassengerState.VA_ENREGISTREMENT:
-            if self.assigned_checkin_zone and self.assigned_checkin_zone.position:
-                return self.assigned_checkin_zone.position
-            return airport.target_checkin
-        elif self.state == PassengerState.VA_SECURITE:
-            if self.assigned_security_zone and self.assigned_security_zone.position:
-                return self.assigned_security_zone.position
-            return airport.target_secu
-        elif self.state == PassengerState.VA_PORTE:
-            if self.assigned_lounge_block and self.assigned_lounge_block.position:
-                return self.assigned_lounge_block.position
-            if self.is_vip:
-                return airport.target_vip_gate
-            return airport.target_gate
-        elif self.state == PassengerState.VA_EMBARQUER:
-            # Aller à la vraie porte pour embarquer
+
+        if self.state == PassengerState.VA_EMBARQUER:
             return airport.target_embarkation
-        # Les états ATTEND_* et EMBARQUEMENT n'ont pas de cible active
+
         return None
-    
+
     def near_target(self, target, radius=1.5):
         """Teste si le passager est près de sa cible."""
         tx, ty = target
@@ -194,8 +194,9 @@ class Passenger:
         """Déplace le passager vers sa cible."""
         # Les passagers en attente ou en embarquement ne bougent pas
         # États fixes: ATTEND_ENREGISTREMENT, ATTEND_SECURITE, ATTEND_EMBARQUEMENT, EMBARQUEMENT, TERMINE
-        if self.state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE, 
-                         PassengerState.ATTEND_EMBARQUEMENT, PassengerState.EMBARQUEMENT, PassengerState.TERMINE):
+        if self.state in (PassengerState.ATTEND_ENREGISTREMENT, PassengerState.ATTEND_SECURITE,
+                         PassengerState.ATTEND_EMBARQUEMENT, PassengerState.ATTEND_COMMERCE,
+                         PassengerState.EMBARQUEMENT, PassengerState.TERMINE):
             self.dir = (0.0, 0.0)  # Aucune direction quand on est fixe
             return
         

@@ -21,6 +21,8 @@ class AirportMap:
         self.planes = self._find('A')
         self.lounges = self._find('S')  # Zones de lounge normales
         self.vip_lounges = self._find('V')  # Zones de lounge VIP
+        # Zones commerciales : B = boutique, K = café (K optionnel)
+        self.commerces = self._find('B') + self._find('K')
         
         # Grouper les lounges par colonne X
         from collections import defaultdict
@@ -48,6 +50,7 @@ class AirportMap:
         self.secus_ordered = sorted(self.secus, key=lambda p: (p[0], p[1]), reverse=True)
         self.lounges_ordered = sorted(self.lounges, key=lambda p: (p[0], p[1]), reverse=True)
         self.vip_lounges_ordered = sorted(self.vip_lounges, key=lambda p: (p[0], p[1]), reverse=True)
+        self.commerces_ordered = sorted(self.commerces, key=lambda p: (p[0], p[1]), reverse=True)
         
         # Points cibles (centre de chaque zone)
         self.target_checkin = self.checkins[len(self.checkins) // 2]
@@ -58,6 +61,8 @@ class AirportMap:
         self.target_vip_gate = self.vip_lounge_column_list[0][0] if self.vip_lounge_column_list else self.target_gate
         # Pour l'embarquement : la vraie porte
         self.target_embarkation = self.gates[0]
+        # Pour le commerce : première case commerciale disponible, sinon pas de détour
+        self.target_commerce = self.commerces_ordered[0] if self.commerces_ordered else None
         
         # Cache des cartes de distance
         self._dist_cache = {}
@@ -66,6 +71,7 @@ class AirportMap:
         self.dist_gate = self.get_dist(self.target_gate)
         self.dist_vip_gate = self.get_dist(self.target_vip_gate)
         self.dist_embarkation = self.get_dist(self.target_embarkation)
+        self.dist_commerce = self.get_dist(self.target_commerce) if self.target_commerce is not None else None
         
         # Matrice de densité (nombre de passagers par cellule)
         self.densite = np.zeros((self.W, self.H), dtype=np.int32)
@@ -98,6 +104,8 @@ class AirportMap:
     
     def get_dist(self, target):
         """Retourne (ou crée) la carte de distance vers une cible."""
+        if target is None:
+            return None
         if target not in self._dist_cache:
             dist = np.full((self.W, self.H), 9999, dtype=np.int32)
             _calc_bfs(dist, self.grid, self.W, self.H, target[0], target[1])
